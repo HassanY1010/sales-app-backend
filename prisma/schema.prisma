@@ -1,0 +1,265 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  SUPPORT
+}
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  password        String
+  fullName        String
+  phoneNumber     String   @unique // Mandatory and unique
+  securityPin     String? // 4-digit hashed code
+  avatarUrl       String?
+  userType        String   @default("individual") // individual, business
+  role            UserRole @default(ADMIN)
+  pushToken       String?
+  isEmailVerified Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  lastLoginAt     DateTime?
+
+  // Relations
+  business      Business?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  expenses      Expense[]
+  adminActions  AdminAction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Business {
+  id           String  @id @default(uuid())
+  name         String
+  businessType String? // Retail, Wholesale, etc.
+  phoneNumber  String?
+  email        String?
+  address      String? @db.Text
+  logoUrl      String?
+  userId       String  @unique
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  // Connections where this business is the requester or receiver
+  sentConnections     Connection[] @relation("Requester")
+  receivedConnections Connection[] @relation("Receiver")
+
+  // Transactions
+  sentTransactions     Transaction[] @relation("TransactionSender")
+  receivedTransactions Transaction[] @relation("TransactionReceiver")
+
+  // Orders
+  sentOrders     Order[] @relation("OrderSender")
+  receivedOrders Order[] @relation("OrderReceiver")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("businesses")
+}
+
+model Connection {
+  id             String @id @default(uuid())
+  requesterId    String
+  receiverId     String
+  status         String @default("PENDING") // PENDING, ACCEPTED, REJECTED, BLOCKED
+  connectionType String @default("CUSTOMER") // CUSTOMER, SUPPLIER (From requester perspective)
+
+  // Relations
+  requester Business @relation("Requester", fields: [requesterId], references: [id])
+  receiver  Business @relation("Receiver", fields: [receiverId], references: [id])
+
+  // Financial Account summary between these two businesses
+  account Account?
+
+  // State Machine helper fields
+  blockedById     String?
+  lastRequestedAt DateTime? @default(now())
+  retryCount      Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requesterId, receiverId])
+  @@map("connections")
+}
+
+model Account {
+  id           String  @id @default(uuid())
+  connectionId String  @unique
+  balance      Decimal @default(0.00) @db.Decimal(15, 2)
+  totalCredit  Decimal @default(0.00) @db.Decimal(15, 2) // له
+  totalDebit   Decimal @default(0.00) @db.Decimal(15, 2) // عليه
+  creditLimit  Decimal @default(100000) @db.Decimal(15, 2) // سقف المديونية
+  billingCycle String? // WEEKLY, MONTHLY, etc.
+  currency     String  @default("YER")
+
+  // Relations
+  connection Connection @relation(fields: [connectionId], references: [id])
+
+  updatedAt DateTime @updatedAt
+
+  @@map("accounts")
+}
+
+model Order {
+  id          String @id @default(uuid())
+  orderNumber String @unique
+  senderId    String
+  receiverId  String
+  status      String @default("PENDING") // PENDING, ACCEPTED, REJECTED, COMPLETED, CANCELLED
+  isCash      Boolean @default(false) // Cash or Credit order (نقدي / آجل)
+
+  subtotal Decimal @default(0.00) @db.Decimal(15, 2)
+  tax      Decimal @default(0.00) @db.Decimal(15, 2)
+  discount Decimal @default(0.00) @db.Decimal(15, 2)
+  total    Decimal @default(0.00) @db.Decimal(15, 2)
+
+  notes String? @db.Text
+
+  // Relations
+  sender       Business      @relation("OrderSender", fields: [senderId], references: [id])
+  receiver     Business      @relation("OrderReceiver", fields: [receiverId], references: [id])
+  items        OrderItem[]
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status], name: "orders_status_idx")
+  @@index([createdAt], name: "orders_created_at_idx")
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  itemName    String
+  description String? @db.Text
+  quantity    Int     @default(1)
+  unitPrice   Decimal @db.Decimal(15, 2)
+  total       Decimal @db.Decimal(15, 2)
+  unit        String? // kg, piece, etc.
+
+  // Relations
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+model Transaction {
+  id              String  @id @default(uuid())
+  transactionType String // PAYMENT, SALE, PURCHASE, ADJUSTMENT
+  amount          Decimal @db.Decimal(15, 2)
+  senderId        String
+  receiverId      String
+  orderId         String?
+  note            String? @db.Text
+
+  // Relations
+  sender   Business @relation("TransactionSender", fields: [senderId], references: [id])
+  receiver Business @relation("TransactionReceiver", fields: [receiverId], references: [id])
+  order    Order?   @relation(fields: [orderId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt], name: "transactions_created_at_idx")
+  @@map("transactions")
+}
+
+model Notification {
+  id     String  @id @default(uuid())
+  userId String
+  title  String
+  body   String  @db.Text
+  type   String? // ORDER_UPDATE, NEW_CONNECTION, PAYMENT_RECEIVED
+  isRead Boolean @default(false)
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String  @id @default(uuid())
+  userId     String?
+  action     String // CREATE, UPDATE, DELETE, LOGIN
+  resource   String // ORDER, USER, CONNECTION
+  resourceId String?
+  details    Json?
+  ipAddress  String?
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  amount      Decimal  @db.Decimal(15, 2)
+  description String   @db.Text
+  date        DateTime @default(now())
+  
+  userId      String
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("expenses")
+}
+
+model AdminAction {
+  id          String   @id @default(uuid())
+  adminId     String
+  action      String   // TOGGLE_USER_STATUS, CHANGE_ROLE, DELETE_BUSINESS, etc.
+  targetType  String   // USER, BUSINESS, ORDER, etc.
+  targetId    String?
+  details     Json?
+  ipAddress   String?
+
+  admin       User     @relation(fields: [adminId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@index([adminId], name: "admin_actions_admin_idx")
+  @@index([createdAt], name: "admin_actions_created_at_idx")
+  @@map("admin_actions")
+}
+
+model SystemSettings {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  isPublic  Boolean  @default(false)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}

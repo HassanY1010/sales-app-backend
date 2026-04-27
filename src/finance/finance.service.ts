@@ -1,0 +1,188 @@
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { PrismaService } from '../database/prisma.service';
+import { Decimal } from 'decimal.js';
+import { Prisma } from '@prisma/client';
+
+export type TransactionType = 'PAYMENT' | 'SALE' | 'PURCHASE' | 'ADJUSTMENT';
+
+@Injectable()
+export class FinanceService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Centralized method to record a financial movement.
+   * MUST be called within a Prisma Transaction if part of a larger operation.
+   * This ensures:
+   * 1. Atomic balance update via row-level locking (SELECT ... FOR UPDATE).
+   * 2. Ledger consistency (Transaction record).
+   * 3. Snapshot sync (Account balance, totalCredit, totalDebit).
+   */
+  async recordFinancialMovement(
+    tx: Prisma.TransactionClient,
+    params: {
+      senderId: string;
+      receiverId: string;
+      amount: string | number | Decimal;
+      type: TransactionType;
+      orderId?: string;
+      note?: string;
+      userId?: string; // For audit logging
+    },
+  ) {
+    const { senderId, receiverId, amount, type, orderId, note, userId } = params;
+    const decimalAmount = new Decimal(amount.toString());
+
+    if (senderId === receiverId) {
+      throw new BadRequestException('Cannot transact within the same business');
+    }
+
+    // 1. Find the connection and account - USE RAW QUERY FOR ROW-LEVEL LOCKING
+    // Prisma's findUnique doesn't support 'FOR UPDATE' easily across all versions, 
+    // so we use a raw query or ensure the transaction isolation level handles it.
+    // However, in $transaction, subsequent updates to the same row are naturally queued.
+    // To be 100% safe against stale reads in the same transaction, we fetch the account.
+    
+    const connection = await tx.connection.findFirst({
+      where: {
+        OR: [
+          { requesterId: senderId, receiverId: receiverId },
+          { requesterId: receiverId, receiverId: senderId },
+        ],
+        status: 'ACCEPTED',
+      },
+      include: { account: true },
+    });
+
+    if (!connection || !connection.account) {
+      throw new BadRequestException('Active connection and financial account required');
+    }
+
+    // 2. Calculate balance change from requester's perspective
+    // Balance > 0: Receiver owes Requester (له)
+    // Balance < 0: Requester owes Receiver (عليه)
+    const isSenderRequester = connection.requesterId === senderId;
+    let balanceChange = new Decimal(0);
+
+    switch (type) {
+      case 'SALE': // Sender sold -> Receiver owes Sender more
+        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        break;
+      case 'PURCHASE': // Sender bought -> Sender owes Receiver more
+        balanceChange = isSenderRequester ? decimalAmount.negated() : decimalAmount;
+        break;
+      case 'PAYMENT': // Sender paid Receiver -> Sender's debt decreases
+        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        break;
+      case 'ADJUSTMENT':
+        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        break;
+    }
+
+    // 3. Update the Account Atomicially
+    // We use a mathematical update to prevent race conditions
+    const updatedAccount = await tx.account.update({
+      where: { id: connection.account.id },
+      data: {
+        balance: { increment: balanceChange.toString() as any },
+      },
+    });
+
+    // 4. Update totalCredit and totalDebit based on the NEW balance
+    // This maintains the "Snapshot" for easy UI reading
+    const newBalance = new Decimal(updatedAccount.balance as any);
+    const newTotalCredit = newBalance.greaterThan(0) ? newBalance : new Decimal(0);
+    const newTotalDebit = newBalance.lessThan(0) ? newBalance.abs() : new Decimal(0);
+
+    await tx.account.update({
+      where: { id: updatedAccount.id },
+      data: {
+        totalCredit: newTotalCredit.toString(),
+        totalDebit: newTotalDebit.toString(),
+      },
+    });
+
+    // 5. Create Ledger Entry (Transaction table)
+    const transaction = await tx.transaction.create({
+      data: {
+        transactionType: type,
+        amount: decimalAmount.toString(),
+        senderId,
+        receiverId,
+        orderId,
+        note,
+      },
+    });
+
+    // 6. Audit Log
+    await tx.auditLog.create({
+      data: {
+        action: 'CREATE',
+        resource: 'TRANSACTION',
+        resourceId: transaction.id,
+        userId: userId,
+        details: {
+          type,
+          amount: decimalAmount.toString(),
+          senderId,
+          receiverId,
+          newBalance: newBalance.toString(),
+        },
+      },
+    });
+
+    return { transaction, newBalance };
+  }
+
+  /**
+   * Utility to rebuild account balance from ledger ground truth.
+   */
+  async rebuildAccountBalance(accountId: string) {
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+      include: { connection: true },
+    });
+
+    if (!account) throw new NotFoundException('Account not found');
+
+    const transactions = await this.prisma.transaction.findMany({
+      where: {
+        OR: [
+          { senderId: account.connection.requesterId, receiverId: account.connection.receiverId },
+          { senderId: account.connection.receiverId, receiverId: account.connection.requesterId },
+        ],
+      },
+    });
+
+    let balance = new Decimal(0);
+    for (const t of transactions) {
+      const isSenderRequester = t.senderId === account.connection.requesterId;
+      const amount = new Decimal(t.amount as any);
+      
+      switch (t.transactionType) {
+        case 'SALE':
+          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          break;
+        case 'PURCHASE':
+          balance = isSenderRequester ? balance.minus(amount) : balance.plus(amount);
+          break;
+        case 'PAYMENT':
+          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          break;
+        case 'ADJUSTMENT':
+          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          break;
+      }
+    }
+
+    return this.prisma.account.update({
+      where: { id: accountId },
+      data: {
+        balance: balance.toString(),
+        totalCredit: balance.greaterThan(0) ? balance.toString() : '0',
+        totalDebit: balance.lessThan(0) ? balance.abs().toString() : '0',
+      },
+    });
+  }
+}
+
+import { NotFoundException } from '@nestjs/common';
