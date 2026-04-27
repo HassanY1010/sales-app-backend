@@ -52,18 +52,14 @@ export class AuthService {
           phoneNumber: dto.phoneNumber,
           securityPin: hashedPin,
           userType: dto.userType,
-          ...(dto.userType === 'business'
-            ? {
-                business: {
-                  create: {
-                    name: dto.businessName!,
-                    businessType: dto.businessType,
-                    phoneNumber: dto.phoneNumber,
-                    email: dto.email,
-                  },
-                },
-              }
-            : {}),
+          business: {
+            create: {
+              name: dto.userType === 'business' ? dto.businessName! : dto.fullName,
+              businessType: dto.userType === 'business' ? dto.businessType : 'Individual',
+              phoneNumber: dto.phoneNumber,
+              email: dto.email,
+            },
+          },
         },
         include: {
           business: true,

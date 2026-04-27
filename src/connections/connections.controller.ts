@@ -19,7 +19,7 @@ import { Roles } from '../core/decorators/roles.decorator';
 
 @Controller('api/v1/connections')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('business') // Only businesses can manage connections
+@Roles('business', 'individual') // Merchants and Consumers can both manage connections
 export class ConnectionsController {
   constructor(private readonly connectionsService: ConnectionsService) {}
 

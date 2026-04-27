@@ -20,7 +20,7 @@ import { Roles } from '../core/decorators/roles.decorator';
 
 @Controller('api/v1/orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('business') // Must be a business
+@Roles('business', 'individual') // Merchants and Consumers can both access orders
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 

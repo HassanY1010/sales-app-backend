@@ -9,7 +9,7 @@ import { Roles } from '../core/decorators/roles.decorator';
 
 @Controller('api/v1/transactions')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('business')
+@Roles('business', 'individual')
 export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
