@@ -11,11 +11,16 @@ import { Decimal } from 'decimal.js';
 import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
+import { NotificationsService } from '../notifications/notifications.service';
+import { EventsGateway } from '../events/events.gateway';
+
 @Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly financeService: FinanceService,
+    private readonly notificationsService: NotificationsService,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   async createOrder(senderId: string, dto: CreateOrderDto) {
@@ -119,7 +124,28 @@ export class OrdersService {
         });
       }
 
-      // 3. Audit log
+      // 3. Send Notifications & Real-time Events
+      const sender = await prisma.business.findUnique({ where: { id: senderId } });
+      const receiver = await prisma.business.findUnique({ where: { id: dto.receiverId }, include: { user: true } });
+
+      const notificationTitle = 'طلبية جديدة';
+      const notificationBody = `لقد استلمت طلبية جديدة من ${sender?.name} برقم #${orderNumber}`;
+
+      await this.notificationsService.sendPushNotification(
+        receiver!.user.id,
+        notificationTitle,
+        notificationBody,
+        { type: 'NEW_ORDER', orderId: order.id }
+      );
+
+      this.eventsGateway.emitToBusiness(dto.receiverId, 'NEW_ORDER', {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        senderName: sender?.name,
+        total: order.total,
+      });
+
+      // 4. Audit log
       await prisma.auditLog.create({
         data: {
           action: 'CREATE',
@@ -221,10 +247,14 @@ export class OrdersService {
       }
     }
 
+    if (dto.status === 'REJECTED' && !dto.rejectionReason) {
+      throw new BadRequestException('يجب ذكر سبب الرفض عند رفض الطلبية');
+    }
+
     // If accepting a credit order, auto-create a SALE transaction
     if (dto.status === 'ACCEPTED' && !order.isCash) {
-      return this.prisma.$transaction(async (prisma) => {
-        const updated = await prisma.order.update({
+      const updated = await this.prisma.$transaction(async (prisma) => {
+        const orderUpdated = await prisma.order.update({
           where: { id: orderId },
           data: { status: dto.status },
         });
@@ -239,25 +269,24 @@ export class OrdersService {
           note: `فاتورة آجل #${order.orderNumber}`,
         });
 
-        // Audit log
-        await prisma.auditLog.create({
-          data: {
-            action: 'UPDATE',
-            resource: 'ORDER',
-            resourceId: orderId,
-            details: { status: dto.status, previousStatus: order.status },
-          },
-        });
-
-        return updated;
+        return orderUpdated;
       });
+
+      await this.notifyOrderStatusUpdate(order, dto.status);
+      return updated;
     }
 
     // Default status update
     const updated = await this.prisma.order.update({
       where: { id: orderId },
-      data: { status: dto.status },
+      data: { 
+        status: dto.status,
+        rejectionReason: dto.status === 'REJECTED' ? dto.rejectionReason : undefined,
+        rejectedById: dto.status === 'REJECTED' ? businessId : undefined,
+      },
     });
+
+    await this.notifyOrderStatusUpdate(order, dto.status, dto.rejectionReason);
 
     // Audit log
     await this.prisma.auditLog.create({
@@ -265,11 +294,50 @@ export class OrdersService {
         action: 'UPDATE',
         resource: 'ORDER',
         resourceId: orderId,
-        details: { status: dto.status, previousStatus: order.status },
+        details: { 
+          status: dto.status, 
+          previousStatus: order.status,
+          rejectionReason: dto.rejectionReason 
+        },
       },
     });
 
     return updated;
+  }
+
+  private async notifyOrderStatusUpdate(order: any, status: string, reason?: string) {
+    const targetBusinessId = order.senderId; // Notify the creator
+    const targetBusiness = await this.prisma.business.findUnique({
+      where: { id: targetBusinessId },
+      include: { user: true },
+    });
+
+    const statusMapAr: { [key: string]: string } = {
+      ACCEPTED: 'مقبولة',
+      REJECTED: 'مرفوضة',
+      COMPLETED: 'مكتملة',
+      CANCELLED: 'ملغاة',
+    };
+
+    const title = 'تحديث حالة الطلبية';
+    let body = `تم تغيير حالة الطلبية #${order.orderNumber} إلى ${statusMapAr[status] || status}`;
+    if (status === 'REJECTED' && reason) {
+      body += `\nالسبب: ${reason}`;
+    }
+
+    await this.notificationsService.sendPushNotification(
+      targetBusiness!.user.id,
+      title,
+      body,
+      { type: 'ORDER_STATUS_UPDATE', orderId: order.id, status }
+    );
+
+    this.eventsGateway.emitToBusiness(targetBusinessId, 'ORDER_STATUS_UPDATE', {
+      orderId: order.id,
+      status,
+      orderNumber: order.orderNumber,
+      rejectionReason: reason,
+    });
   }
 }
 

@@ -10,9 +10,16 @@ import { CreateConnectionDto } from './dto/create-connection.dto';
 import { Decimal } from 'decimal.js';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
+import { NotificationsService } from '../notifications/notifications.service';
+import { EventsGateway } from '../events/events.gateway';
+
 @Injectable()
 export class ConnectionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+    private readonly eventsGateway: EventsGateway,
+  ) {}
 
   async createConnection(businessId: string, dto: CreateConnectionDto) {
     if (businessId === dto.receiverId) {
@@ -69,14 +76,34 @@ export class ConnectionsService {
     }
 
     // 4. Create new connection if none exists
-    return this.prisma.connection.create({
+    const newConnection = await this.prisma.connection.create({
       data: {
         requesterId: businessId,
         receiverId: dto.receiverId,
         connectionType: dto.connectionType,
         lastRequestedAt: new Date(),
       },
+      include: {
+        requester: true,
+        receiver: { include: { user: true } },
+      },
     });
+
+    // 5. Send Notification
+    await this.notificationsService.sendPushNotification(
+      newConnection.receiver.user.id,
+      'طلب ارتباط جديد',
+      `يريد ${newConnection.requester.name} الارتباط بحسابك كـ ${dto.connectionType === 'SUPPLIER' ? 'مورد' : 'عميل'}`,
+      { type: 'NEW_CONNECTION_REQUEST', connectionId: newConnection.id }
+    );
+
+    this.eventsGateway.emitToBusiness(dto.receiverId, 'NEW_CONNECTION_REQUEST', {
+      id: newConnection.id,
+      requesterName: newConnection.requester.name,
+      connectionType: dto.connectionType,
+    });
+
+    return newConnection;
   }
 
   async acceptConnection(
@@ -131,7 +158,7 @@ export class ConnectionsService {
         },
         include: {
           account: true,
-          requester: true,
+          requester: { include: { user: true } },
           receiver: true,
         },
       });
@@ -164,6 +191,19 @@ export class ConnectionsService {
         });
       }
 
+      // Notify the requester
+      await this.notificationsService.sendPushNotification(
+        updated.requester.user.id,
+        'تم قبول طلب الارتباط',
+        `لقد قبل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
+        { type: 'CONNECTION_ACCEPTED', connectionId: updated.id }
+      );
+
+      this.eventsGateway.emitToBusiness(updated.requesterId, 'CONNECTION_ACCEPTED', {
+        id: updated.id,
+        receiverName: updated.receiver.name,
+      });
+
       return updated;
     });
   }
@@ -185,12 +225,31 @@ export class ConnectionsService {
       throw new BadRequestException(`الارتباط بالفعل ${connection.status}`);
     }
 
-    return this.prisma.connection.update({
+    const updated = await this.prisma.connection.update({
       where: { id: connectionId },
       data: {
         status: 'REJECTED',
       },
+      include: {
+        requester: { include: { user: true } },
+        receiver: true,
+      },
     });
+
+    // Notify the requester
+    await this.notificationsService.sendPushNotification(
+      updated.requester.user.id,
+      'تم رفض طلب الارتباط',
+      `لقد تم رفض طلب الارتباط من قبل ${updated.receiver.name}.`,
+      { type: 'CONNECTION_REJECTED', connectionId: updated.id }
+    );
+
+    this.eventsGateway.emitToBusiness(updated.requesterId, 'CONNECTION_REJECTED', {
+      id: updated.id,
+      receiverName: updated.receiver.name,
+    });
+
+    return updated;
   }
 
   async getConnections(businessId: string, pagination: PaginationDto, search?: string) {

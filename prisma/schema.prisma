@@ -132,7 +132,9 @@ model Order {
   discount Decimal @default(0.00) @db.Decimal(15, 2)
   total    Decimal @default(0.00) @db.Decimal(15, 2)
 
-  notes String? @db.Text
+  notes           String? @db.Text
+  rejectionReason String? @db.Text
+  rejectedById    String?
 
   // Relations
   sender       Business      @relation("OrderSender", fields: [senderId], references: [id])

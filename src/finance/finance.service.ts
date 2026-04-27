@@ -5,9 +5,16 @@ import { Prisma } from '@prisma/client';
 
 export type TransactionType = 'PAYMENT' | 'SALE' | 'PURCHASE' | 'ADJUSTMENT';
 
+import { NotificationsService } from '../notifications/notifications.service';
+import { EventsGateway } from '../events/events.gateway';
+
 @Injectable()
 export class FinanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+    private readonly eventsGateway: EventsGateway,
+  ) {}
 
   /**
    * Centralized method to record a financial movement.
@@ -130,7 +137,59 @@ export class FinanceService {
       },
     });
 
+    // 7. Send Real-time Notification
+    await this.notifyFinancialMovement(params, newBalance);
+
     return { transaction, newBalance };
+  }
+
+  private async notifyFinancialMovement(params: any, newBalance: Decimal) {
+    const { senderId, receiverId, amount, type, note } = params;
+    
+    // Fetch participants for notification
+    const sender = await this.prisma.business.findUnique({ where: { id: senderId } });
+    const receiver = await this.prisma.business.findUnique({ where: { id: receiverId }, include: { user: true } });
+
+    if (!receiver) return;
+
+    let title = '';
+    let body = '';
+
+    const amountStr = new Decimal(amount.toString()).toFixed(2);
+
+    switch (type) {
+      case 'PAYMENT':
+        title = 'تم استلام مبلغ سداد';
+        body = `لقد استلمت مبلغ ${amountStr} من ${sender?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`;
+        break;
+      case 'SALE':
+        // Notification for Sale is usually handled by Order service, 
+        // but if it's a direct transaction, we handle it here.
+        title = 'فاتورة جديدة';
+        body = `تم تسجيل فاتورة بقيمة ${amountStr} من ${sender?.name}.`;
+        break;
+      case 'ADJUSTMENT':
+        title = 'تعديل رصيد';
+        body = `قام ${sender?.name} بتعديل الرصيد بقيمة ${amountStr}.`;
+        break;
+    }
+
+    if (title) {
+      await this.notificationsService.sendPushNotification(
+        receiver.user.id,
+        title,
+        body,
+        { type: 'FINANCIAL_UPDATE', amount: amountStr, transactionType: type }
+      );
+
+      this.eventsGateway.emitToBusiness(receiverId, 'FINANCIAL_UPDATE', {
+        type,
+        amount: amountStr,
+        newBalance: newBalance.toString(),
+        senderName: sender?.name,
+        note,
+      });
+    }
   }
 
   /**
