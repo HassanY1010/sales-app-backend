@@ -89,4 +89,15 @@ export class ConnectionsController {
     }
     return this.connectionsService.unblockConnection(user.businessId, connectionId);
   }
+
+  @Post('manual-add')
+  async manualAdd(
+    @CurrentUser() user: any,
+    @Body() body: any,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.connectionsService.manualAddConnection(user.businessId, body);
+  }
 }

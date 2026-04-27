@@ -140,4 +140,48 @@ export class AuthService {
       user: userWithoutPassword,
     };
   }
+
+  async verifyResetPin(identifier: String, pin: String) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email: identifier as string }, { phoneNumber: identifier as string }],
+      },
+    });
+
+    if (!user || !user.securityPin) {
+      throw new UnauthorizedException('البيانات غير صحيحة أو رمز الأمان غير مفعل');
+    }
+
+    const isPinValid = await bcrypt.compare(pin as string, user.securityPin);
+    if (!isPinValid) {
+      throw new UnauthorizedException('رمز الأمان غير صحيح');
+    }
+
+    return { success: true, message: 'تم التحقق بنجاح' };
+  }
+
+  async resetPassword(identifier: string, newPassword: string, pin: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email: identifier }, { phoneNumber: identifier }],
+      },
+    });
+
+    if (!user || !user.securityPin) {
+      throw new UnauthorizedException('المستخدم غير موجود');
+    }
+
+    const isPinValid = await bcrypt.compare(pin, user.securityPin);
+    if (!isPinValid) {
+      throw new UnauthorizedException('رمز الأمان غير صحيح');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashedPassword },
+    });
+
+    return { success: true, message: 'تم تغيير كلمة المرور بنجاح' };
+  }
 }

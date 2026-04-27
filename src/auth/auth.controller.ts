@@ -17,4 +17,14 @@ export class AuthController {
   async login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
+
+  @Post('verify-reset-pin')
+  async verifyResetPin(@Body() body: { identifier: string; pin: string }) {
+    return this.authService.verifyResetPin(body.identifier, body.pin);
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() body: { identifier: string; newPassword: string; pin: string }) {
+    return this.authService.resetPassword(body.identifier, body.newPassword, body.pin);
+  }
 }

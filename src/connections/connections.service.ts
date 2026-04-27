@@ -349,5 +349,80 @@ export class ConnectionsService {
       },
     });
   }
+  async manualAddConnection(myBusinessId: string, dto: any) {
+    const { phoneNumber, name, businessName, connectionType = 'CUSTOMER' } = dto;
+
+    let targetBusiness = await this.prisma.business.findFirst({
+      where: { phoneNumber: phoneNumber },
+    });
+
+    if (!targetBusiness) {
+      let targetUser = await this.prisma.user.findUnique({
+        where: { phoneNumber: phoneNumber },
+      });
+
+      if (!targetUser) {
+        targetUser = await this.prisma.user.create({
+          data: {
+            phoneNumber: phoneNumber,
+            fullName: name,
+            email: `shadow_${phoneNumber}@local`,
+            password: 'placeholder_password',
+            userType: 'individual',
+          },
+        });
+      }
+
+      targetBusiness = await this.prisma.business.create({
+        data: {
+          name: businessName || name,
+          phoneNumber: phoneNumber,
+          userId: targetUser.id,
+          businessType: 'Shadow',
+        },
+      });
+    }
+
+    const existing = await this.prisma.connection.findFirst({
+      where: {
+        OR: [
+          { requesterId: myBusinessId, receiverId: targetBusiness.id },
+          { requesterId: targetBusiness.id, receiverId: myBusinessId },
+        ],
+      },
+    });
+
+    if (existing && existing.status === 'ACCEPTED') {
+      throw new ConflictException('الارتباط موجود بالفعل');
+    }
+
+    if (existing) {
+      return this.prisma.connection.update({
+        where: { id: existing.id },
+        data: {
+          status: 'ACCEPTED',
+          connectionType: connectionType,
+          account: {
+            upsert: {
+              create: { balance: 0, creditLimit: 100000 },
+              update: {},
+            },
+          },
+        },
+      });
+    }
+
+    return this.prisma.connection.create({
+      data: {
+        requesterId: myBusinessId,
+        receiverId: targetBusiness.id,
+        status: 'ACCEPTED',
+        connectionType: connectionType,
+        account: {
+          create: { balance: 0, creditLimit: 100000 },
+        },
+      },
+    });
+  }
 }
 
