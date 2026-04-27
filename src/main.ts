@@ -65,9 +65,10 @@ async function bootstrap() {
 
   // Enable Strict CORS
   app.enableCors({
-    origin: process.env.FRONTEND_URL || '*', // Update with specific origins in production
+    origin: true, // This will reflect the request origin
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    allowedHeaders: 'Content-Type,Accept,Authorization,x-idempotency-key',
   });
 
   const port = process.env.PORT || 3000;
