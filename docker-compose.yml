@@ -12,27 +12,28 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=mysql://root:hhaall112233$@database:3306/business_manager
+      - DATABASE_URL=postgresql://postgres:password@database:5432/business_manager?schema=public
     depends_on:
       database:
         condition: service_healthy
 
   database:
-    image: mysql:8.0
-    container_name: mabe3at_mysql
+    image: postgres:15-alpine
+    container_name: mabe3at_postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: hhaall112233$$
-      MYSQL_DATABASE: business_manager
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: business_manager
     ports:
-      - '3306:3306'
+      - '5432:5432'
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
 volumes:
-  mysql_data:
+  postgres_data:
