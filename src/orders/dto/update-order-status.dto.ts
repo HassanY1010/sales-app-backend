@@ -1,4 +1,4 @@
-import { IsEnum } from 'class-validator';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class UpdateOrderStatusDto {
   @IsEnum(['PENDING', 'ACCEPTED', 'REJECTED', 'COMPLETED', 'CANCELLED'])
@@ -8,5 +8,3 @@ export class UpdateOrderStatusDto {
   @IsString()
   rejectionReason?: string;
 }
-
-import { IsOptional, IsString } from 'class-validator';
