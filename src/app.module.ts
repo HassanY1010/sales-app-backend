@@ -15,6 +15,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { FinanceModule } from './finance/finance.module';
 import { AdminModule } from './admin/admin.module';
+import { BackupModule } from './backup/backup.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -40,6 +41,7 @@ import { AppService } from './app.service';
     ExpensesModule,
     FinanceModule,
     AdminModule,
+    BackupModule,
   ],
   controllers: [AppController],
   providers: [

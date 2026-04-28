@@ -27,4 +27,9 @@ export class AuthController {
   async resetPassword(@Body() body: { identifier: string; newPassword: string; pin: string }) {
     return this.authService.resetPassword(body.identifier, body.newPassword, body.pin);
   }
+
+  @Post('forgot-password')
+  async forgotPassword(@Body() body: { email: string }) {
+    return this.authService.forgotPassword(body.email);
+  }
 }

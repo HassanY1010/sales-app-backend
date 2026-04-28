@@ -184,4 +184,25 @@ export class AuthService {
 
     return { success: true, message: 'تم تغيير كلمة المرور بنجاح' };
   }
+
+  async forgotPassword(identifier: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email: identifier }, { phoneNumber: identifier }],
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('المستخدم غير موجود');
+    }
+
+    // In a real app, we would generate a new code and send it via SMS/Email.
+    // For this app, we use the securityPin set during registration.
+    // If the user doesn't have one, we could generate one here.
+    
+    return {
+      success: true,
+      message: 'يرجى استخدام رمز الأمان (PIN) الخاص بك المكون من 4 أرقام لإعادة تعيين كلمة المرور.',
+    };
+  }
 }
