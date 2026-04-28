@@ -177,12 +177,34 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.prisma.user.update({
+    const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
-      data: { password: hashedPassword },
+      data: { 
+        password: hashedPassword,
+        lastLoginAt: new Date(),
+      },
+      include: {
+        business: true,
+      },
     });
 
-    return { success: true, message: 'تم تغيير كلمة المرور بنجاح' };
+    const payload = {
+      sub: updatedUser.id,
+      email: updatedUser.email,
+      userType: updatedUser.userType,
+      role: updatedUser.role,
+      businessId: updatedUser.business?.id,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+    const { password: _, securityPin: __, ...userWithoutPassword } = updatedUser;
+
+    return {
+      success: true,
+      message: 'تم تغيير كلمة المرور بنجاح',
+      accessToken,
+      user: userWithoutPassword,
+    };
   }
 
   async forgotPassword(identifier: string) {
