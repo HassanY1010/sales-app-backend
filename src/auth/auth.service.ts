@@ -141,7 +141,7 @@ export class AuthService {
     };
   }
 
-  async verifyResetPin(identifier: String, pin: String) {
+  async verifyResetPin(identifier: string, pin: string) {
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: identifier as string }, { phoneNumber: identifier as string }],
