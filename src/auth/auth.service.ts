@@ -144,17 +144,18 @@ export class AuthService {
   async verifyResetPin(identifier: string, pin: string) {
     const user = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: identifier as string }, { phoneNumber: identifier as string }],
+        OR: [{ email: identifier }, { phoneNumber: identifier }],
       },
     });
 
     if (!user || !user.securityPin) {
-      throw new UnauthorizedException('البيانات غير صحيحة أو رمز الأمان غير مفعل');
+      // Generic message to avoid account enumeration
+      throw new UnauthorizedException('البيانات المدخلة غير صحيحة، يرجى المحاولة مرة أخرى أو إنشاء حساب جديد');
     }
 
-    const isPinValid = await bcrypt.compare(pin as string, user.securityPin);
+    const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
-      throw new UnauthorizedException('رمز الأمان غير صحيح');
+      throw new UnauthorizedException('البيانات المدخلة غير صحيحة، يرجى المحاولة مرة أخرى أو إنشاء حساب جديد');
     }
 
     return { success: true, message: 'تم التحقق بنجاح' };
@@ -168,12 +169,12 @@ export class AuthService {
     });
 
     if (!user || !user.securityPin) {
-      throw new UnauthorizedException('المستخدم غير موجود');
+      throw new UnauthorizedException('البيانات المدخلة غير صحيحة، يرجى المحاولة مرة أخرى أو إنشاء حساب جديد');
     }
 
     const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
-      throw new UnauthorizedException('رمز الأمان غير صحيح');
+      throw new UnauthorizedException('البيانات المدخلة غير صحيحة، يرجى المحاولة مرة أخرى أو إنشاء حساب جديد');
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
