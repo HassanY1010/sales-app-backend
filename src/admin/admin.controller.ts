@@ -28,7 +28,7 @@ import { AdminOrdersQueryDto, UpdateOrderStatusDto } from './dto/admin-order.dto
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
-@Controller('admin')
+@Controller('api/v1/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}

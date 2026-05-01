@@ -14,6 +14,7 @@ enum UserRole {
   SUPER_ADMIN
   ADMIN
   SUPPORT
+  USER
 }
 
 model User {
@@ -25,7 +26,7 @@ model User {
   securityPin     String? // 4-digit hashed code
   avatarUrl       String?
   userType        String   @default("individual") // individual, business
-  role            UserRole @default(ADMIN)
+  role            UserRole @default(USER)
   pushToken       String?
   isEmailVerified Boolean  @default(false)
   isActive        Boolean  @default(true)

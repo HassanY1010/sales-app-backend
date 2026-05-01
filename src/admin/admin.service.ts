@@ -54,11 +54,11 @@ export class AdminService {
 
     const monthlyRevenue = await this.prisma.$queryRaw<any[]>`
       SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') as month,
+        TO_CHAR(created_at, 'YYYY-MM') as month,
         SUM(amount) as total
       FROM transactions
-      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
-      GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+      WHERE created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY TO_CHAR(created_at, 'YYYY-MM')
       ORDER BY month ASC
     `;
 
