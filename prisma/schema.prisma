@@ -91,6 +91,7 @@ model Connection {
   account Account?
 
   // State Machine helper fields
+  showPrices      Boolean  @default(false)
   blockedById     String?
   lastRequestedAt DateTime? @default(now())
   retryCount      Int       @default(0)

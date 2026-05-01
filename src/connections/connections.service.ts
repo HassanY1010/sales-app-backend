@@ -113,6 +113,7 @@ export class ConnectionsService {
       creditLimit?: number;
       billingCycle?: string;
       openingBalance?: number;
+      showPrices?: boolean;
     },
   ) {
     const connection = await this.prisma.connection.findUnique({
@@ -134,6 +135,7 @@ export class ConnectionsService {
     const creditLimit = options?.creditLimit ?? 100000;
     const billingCycle = options?.billingCycle ?? null;
     const openingBalance = options?.openingBalance ?? 0;
+    const showPrices = options?.showPrices ?? false;
 
     // Accept connection and auto-create a financial Account with credit config if it doesn't exist
     return this.prisma.$transaction(async (prisma) => {
@@ -142,7 +144,7 @@ export class ConnectionsService {
         where: { connectionId },
       });
 
-      const updated = await prisma.connection.update({
+      const updated = await (prisma.connection as any).update({
         where: { id: connectionId },
         data: {
           status: 'ACCEPTED',
@@ -155,13 +157,14 @@ export class ConnectionsService {
               billingCycle,
             },
           } : undefined, // If account already exists, we just update status to ACCEPTED
+          showPrices,
         },
         include: {
           account: true,
           requester: { include: { user: true } },
           receiver: true,
         },
-      });
+      }) as any;
 
       // If there's an opening balance, create an ADJUSTMENT transaction to document it
       if (openingBalance !== 0) {
@@ -347,6 +350,25 @@ export class ConnectionsService {
         status: 'PENDING',
         blockedById: null,
       },
+    });
+  }
+  
+  async toggleShowPrices(businessId: string, connectionId: string, show: boolean) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id: connectionId },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    if (connection.requesterId !== businessId && connection.receiverId !== businessId) {
+      throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
+    }
+
+    return (this.prisma.connection as any).update({
+      where: { id: connectionId },
+      data: { showPrices: show },
     });
   }
   async manualAddConnection(myBusinessId: string, dto: any) {

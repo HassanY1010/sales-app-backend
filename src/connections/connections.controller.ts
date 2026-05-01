@@ -100,4 +100,16 @@ export class ConnectionsController {
     }
     return this.connectionsService.manualAddConnection(user.businessId, body);
   }
+
+  @Patch(':id/toggle-show-prices')
+  async toggleShowPrices(
+    @CurrentUser() user: any,
+    @Param('id') connectionId: string,
+    @Body('show') show: boolean,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.connectionsService.toggleShowPrices(user.businessId, connectionId, show);
+  }
 }

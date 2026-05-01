@@ -34,7 +34,7 @@ export class AuthService {
       if (existingUser.email === dto.email) {
         throw new ConflictException('البريد الإلكتروني مستخدم بالفعل');
       }
-      throw new ConflictException('رقم الهاتف مسجل بالفعل');
+      throw new ConflictException('رقم الهاتف مستخدم مسبقا');
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -106,6 +106,19 @@ export class AuthService {
     });
 
     if (!user) {
+      throw new UnauthorizedException('رقم الهاتف أو كلمة المرور غير صحيحة');
+    }
+
+    // Verify user type
+    // Flutter: 'merchant' -> Backend: 'business'
+    // Flutter: 'consumer' -> Backend: 'individual'
+    const mappedUserType = dto.userType === 'merchant' ? 'business' : 
+                          dto.userType === 'consumer' ? 'individual' : dto.userType;
+
+    // Skip userType check for admins logging into the dashboard
+    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN';
+    
+    if (!isAdmin && dto.userType && user.userType !== mappedUserType) {
       throw new UnauthorizedException('رقم الهاتف أو كلمة المرور غير صحيحة');
     }
 
