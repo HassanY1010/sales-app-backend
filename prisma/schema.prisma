@@ -37,6 +37,7 @@ model User {
   notifications Notification[]
   auditLogs     AuditLog[]
   expenses      Expense[]
+  suggestions   Suggestion[]
   adminActions  AdminAction[]
 
   createdAt DateTime @default(now())
@@ -69,6 +70,9 @@ model Business {
   // Orders
   sentOrders     Order[] @relation("OrderSender")
   receivedOrders Order[] @relation("OrderReceiver")
+
+  subscriptionStatus String   @default("FREE") // FREE, GOLD, EXPIRED
+  subscriptionExpiry DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -266,4 +270,16 @@ model SystemSettings {
   updatedAt DateTime @updatedAt
 
   @@map("system_settings")
+}
+model Suggestion {
+  id        String   @id @default(uuid())
+  userId    String
+  content   String   @db.Text
+  whatsapp  String?
+  status    String   @default("OPEN") // OPEN, REVIEWED, CLOSED
+  
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@map("suggestions")
 }

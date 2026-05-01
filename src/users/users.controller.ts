@@ -1,4 +1,5 @@
-import { Controller, Get, Patch, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UsersService } from './users.service';
@@ -28,5 +29,11 @@ export class UsersController {
   @Post('me/change-pin')
   async changeSecurityPin(@CurrentUser() user: any, @Body() body: { pin: string }) {
     return this.usersService.changeSecurityPin(user.userId, body.pin);
+  }
+
+  @Post('me/logo')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadLogo(@CurrentUser() user: any, @UploadedFile() file: any) {
+    return { url: `/uploads/logos/${user.userId}_${file?.originalname}` };
   }
 }
