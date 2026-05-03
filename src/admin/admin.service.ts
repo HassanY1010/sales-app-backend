@@ -55,13 +55,19 @@ export class AdminService {
 
     const monthlyRevenue = await this.prisma.$queryRaw<any[]>`
       SELECT 
-        TO_CHAR(created_at, 'YYYY-MM') as month,
+        TO_CHAR("createdAt", 'YYYY-MM') as month,
         SUM(amount) as total
       FROM transactions
-      WHERE created_at >= NOW() - INTERVAL '6 months'
-      GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+      WHERE "createdAt" >= NOW() - INTERVAL '6 months'
+      GROUP BY TO_CHAR("createdAt", 'YYYY-MM')
       ORDER BY month ASC
     `;
+
+    // Ensure numeric types from raw query are converted to strings for JSON safety
+    const formattedMonthlyRevenue = monthlyRevenue.map(row => ({
+      month: row.month,
+      total: row.total?.toString() || '0'
+    }));
 
     return {
       totalUsers,
@@ -69,7 +75,7 @@ export class AdminService {
       totalOrders,
       totalRevenue: totalRevenue._sum.amount?.toString() || '0',
       ordersByStatus,
-      monthlyRevenue,
+      monthlyRevenue: formattedMonthlyRevenue,
       recentOrders,
       recentTransactions,
     };
