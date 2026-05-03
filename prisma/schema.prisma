@@ -39,6 +39,9 @@ model User {
   expenses      Expense[]
   suggestions   Suggestion[]
   adminActions  AdminAction[]
+  paymentRequests PaymentRequest[]
+  approvedPayments PaymentRequest[] @relation("ApprovedPayments")
+  subscriptions    UserSubscription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -73,6 +76,9 @@ model Business {
 
   subscriptionStatus String   @default("FREE") // FREE, GOLD, EXPIRED
   subscriptionExpiry DateTime?
+  
+  paymentRequests PaymentRequest[]
+  subscriptions    UserSubscription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -282,4 +288,74 @@ model Suggestion {
   createdAt DateTime @default(now())
 
   @@map("suggestions")
+}
+
+enum SubscriptionStatus {
+  FREE
+  GOLD
+  EXPIRED
+}
+
+enum PaymentRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PaymentRequest {
+  id          String                @id @default(uuid())
+  userId      String
+  businessId  String?
+  amount      Decimal               @db.Decimal(15, 2)
+  wallet      String                // Jawali, Cash, etc.
+  status      PaymentRequestStatus  @default(PENDING)
+  notes       String?               @db.Text
+  receiptUrl  String?
+  
+  user        User                  @relation(fields: [userId], references: [id])
+  business    Business?             @relation(fields: [businessId], references: [id])
+  
+  approvedById String?
+  approvedBy   User?                 @relation("ApprovedPayments", fields: [approvedById], references: [id])
+  
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@map("payment_requests")
+}
+
+model SubscriptionPlan {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  price           Decimal  @db.Decimal(15, 2)
+  durationDays    Int      @default(365)
+  features        Json?
+  isActive        Boolean  @default(true)
+  
+  subscriptions   UserSubscription[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("subscription_plans")
+}
+
+model UserSubscription {
+  id              String   @id @default(uuid())
+  userId          String
+  businessId      String?
+  planId          String
+  status          SubscriptionStatus @default(FREE)
+  expiryDate      DateTime?
+  autoRenew       Boolean @default(false)
+  
+  user            User     @relation(fields: [userId], references: [id])
+  business        Business? @relation(fields: [businessId], references: [id])
+  plan            SubscriptionPlan @relation(fields: [planId], references: [id])
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("user_subscriptions")
 }

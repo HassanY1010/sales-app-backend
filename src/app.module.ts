@@ -17,6 +17,7 @@ import { FinanceModule } from './finance/finance.module';
 import { AdminModule } from './admin/admin.module';
 import { BackupModule } from './backup/backup.module';
 import { MonitoringModule } from './monitoring/monitoring.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -44,6 +45,7 @@ import { AppService } from './app.service';
     AdminModule,
     BackupModule,
     MonitoringModule,
+    SubscriptionsModule,
   ],
   controllers: [AppController],
   providers: [

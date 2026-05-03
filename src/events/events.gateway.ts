@@ -17,6 +17,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private logger = new Logger('EventsGateway');
   // Map businessId to array of socketIds
   private activeSockets = new Map<string, string[]>();
+  // Map admin role to array of socketIds
+  private adminSockets = new Map<string, string[]>();
 
   constructor(private jwtService: JwtService) {}
 
@@ -30,19 +32,26 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const payload = this.jwtService.verify(token);
       const businessId = payload.businessId;
-
-      if (!businessId) {
-        client.disconnect();
-        return;
-      }
+      const role = payload.role;
 
       client.data.businessId = businessId;
+      client.data.role = role;
 
-      const userSockets = this.activeSockets.get(businessId) || [];
-      userSockets.push(client.id);
-      this.activeSockets.set(businessId, userSockets);
+      // Admin sockets for receiving notifications
+      if (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPPORT') {
+        const adminSockets = this.adminSockets.get(role) || [];
+        adminSockets.push(client.id);
+        this.adminSockets.set(role, adminSockets);
+        this.logger.log(`Admin ${role} connected: ${client.id}`);
+      }
 
-      this.logger.log(`Client connected: ${client.id} (Business: ${businessId})`);
+      // Business sockets
+      if (businessId) {
+        const userSockets = this.activeSockets.get(businessId) || [];
+        userSockets.push(client.id);
+        this.activeSockets.set(businessId, userSockets);
+        this.logger.log(`Client connected: ${client.id} (Business: ${businessId})`);
+      }
     } catch (e) {
       client.disconnect();
     }
@@ -50,6 +59,17 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     const businessId = client.data.businessId;
+    const role = client.data.role;
+
+    if (role && (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPPORT')) {
+      const adminSockets = this.adminSockets.get(role) || [];
+      const index = adminSockets.indexOf(client.id);
+      if (index > -1) {
+        adminSockets.splice(index, 1);
+        this.adminSockets.set(role, adminSockets);
+      }
+    }
+
     if (businessId) {
       const userSockets = this.activeSockets.get(businessId) || [];
       const index = userSockets.indexOf(client.id);
@@ -69,5 +89,24 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.server.to(socketId).emit(event, payload);
       });
     }
+  }
+
+  // Helper method to emit events to all admins
+  emitToAllAdmins(event: string, payload: any) {
+    const roles = ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'];
+    roles.forEach((role) => {
+      const sockets = this.adminSockets.get(role) || [];
+      sockets.forEach((socketId) => {
+        this.server.to(socketId).emit(event, payload);
+      });
+    });
+  }
+
+  // Helper method to emit events to specific admin role
+  emitToRole(role: string, event: string, payload: any) {
+    const sockets = this.adminSockets.get(role) || [];
+    sockets.forEach((socketId) => {
+      this.server.to(socketId).emit(event, payload);
+    });
   }
 }

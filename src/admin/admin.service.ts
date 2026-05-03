@@ -6,6 +6,7 @@ import { AdminBusinessesQueryDto, ToggleBusinessStatusDto, BusinessStatsDto } fr
 import { AdminOrdersQueryDto } from './dto/admin-order.dto';
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
 import Decimal from 'decimal.js';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class AdminService {
@@ -176,6 +177,28 @@ export class AdminService {
     });
 
     return updated;
+  }
+
+  async resetUserPassword(userId: string, adminId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('المستخدم غير موجود');
+    }
+
+    // Default password for reset
+    const defaultPassword = 'User123456';
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+
+    await this.logAdminAction(adminId, 'RESET_USER_PASSWORD', 'USER', userId, {
+      message: 'Password reset to default',
+    });
+
+    return { success: true, message: 'تم إعادة تعيين كلمة المرور إلى: User123456' };
   }
 
   // ==================== Businesses Management ====================

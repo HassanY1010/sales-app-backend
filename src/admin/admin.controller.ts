@@ -65,6 +65,12 @@ export class AdminController {
     return this.adminService.toggleUserStatus(dto, req.user.userId);
   }
 
+  @Put('users/:id/reset-password')
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  resetUserPassword(@Param('id') id: string, @Request() req: any) {
+    return this.adminService.resetUserPassword(id, req.user.userId);
+  }
+
   // ==================== Businesses ====================
   @Get('businesses')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
