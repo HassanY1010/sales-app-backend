@@ -15,7 +15,7 @@ import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
-@Controller('api/v1/expenses')
+@Controller('expenses')
 @UseGuards(JwtAuthGuard)
 export class ExpensesController {
   constructor(private readonly expensesService: ExpensesService) {}

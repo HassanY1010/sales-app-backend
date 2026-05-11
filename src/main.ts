@@ -34,13 +34,8 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule, { logger });
 
-  // 1. API Versioning (Disabled because controllers already use /api/v1 prefix)
-  /*
-  app.enableVersioning({
-    type: VersioningType.URI,
-    defaultVersion: '1', // Routes will be prefixed with /v1
-  });
-  */
+  // 1. API Versioning & Prefix
+  app.setGlobalPrefix('api/v1');
 
   // 2. Security Headers
   app.use(helmet());

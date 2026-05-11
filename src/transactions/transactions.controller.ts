@@ -7,7 +7,7 @@ import { RolesGuard } from '../core/guards/roles.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { Roles } from '../core/decorators/roles.decorator';
 
-@Controller('api/v1/transactions')
+@Controller('transactions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('business', 'individual')
 export class TransactionsController {

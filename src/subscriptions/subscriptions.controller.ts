@@ -16,7 +16,7 @@ import { Roles } from '../core/decorators/roles.decorator';
 import { CreatePaymentRequestDto } from './dto/create-payment-request.dto';
 import { ApprovePaymentDto } from './dto/approve-payment.dto';
 
-@Controller('api/v1/subscriptions')
+@Controller('subscriptions')
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 

@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
-@Controller('api/v1/notifications')
+@Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationsController {
   constructor(

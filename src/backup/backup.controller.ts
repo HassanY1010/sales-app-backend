@@ -3,7 +3,7 @@ import { BackupService } from './backup.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 
-@Controller('api/v1/backup')
+@Controller('backup')
 @UseGuards(JwtAuthGuard)
 export class BackupController {
   constructor(private readonly backupService: BackupService) {}

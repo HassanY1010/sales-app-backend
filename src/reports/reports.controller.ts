@@ -5,9 +5,9 @@ import { RolesGuard } from '../core/guards/roles.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { Roles } from '../core/decorators/roles.decorator';
 
-@Controller('api/v1/reports')
+@Controller('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('business')
+@Roles('business', 'individual')
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 

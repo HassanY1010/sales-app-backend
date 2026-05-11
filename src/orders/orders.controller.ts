@@ -18,7 +18,7 @@ import { RolesGuard } from '../core/guards/roles.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { Roles } from '../core/decorators/roles.decorator';
 
-@Controller('api/v1/orders')
+@Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('business', 'individual') // Merchants and Consumers can both access orders
 export class OrdersController {

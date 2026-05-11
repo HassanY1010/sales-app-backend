@@ -17,7 +17,7 @@ import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { RolesGuard } from '../core/guards/roles.guard';
 import { Roles } from '../core/decorators/roles.decorator';
 
-@Controller('api/v1/connections')
+@Controller('connections')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('business', 'individual') // Merchants and Consumers can both manage connections
 export class ConnectionsController {
