@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, Param, UseGuards, Query } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Param, UseGuards, Query, NotFoundException, BadRequestException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../database/prisma.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
@@ -29,20 +29,39 @@ export class NotificationsController {
   @Post('send')
   async sendDirectNotification(
     @CurrentUser() user: any,
-    @Body() body: { targetBusinessId: string; title: string; body: string },
+    @Body() body: { targetBusinessId?: string; targetUserId?: string; title?: string; body: string },
   ) {
-    // Find the user ID of the target business
-    const targetBusiness = await this.prisma.business.findUnique({
-      where: { id: body.targetBusinessId },
-      select: { userId: true, name: true },
+    let targetUserId = body.targetUserId;
+
+    if (body.targetBusinessId) {
+      // Find the user ID of the target business
+      const targetBusiness = await this.prisma.business.findUnique({
+        where: { id: body.targetBusinessId },
+        select: { userId: true },
+      });
+
+      if (!targetBusiness) {
+        throw new NotFoundException('المستلم (النشاط التجاري) غير موجود');
+      }
+      targetUserId = targetBusiness.userId;
+    }
+
+    if (!targetUserId) {
+      throw new BadRequestException('يجب تحديد المستلم (معرف المستخدم أو النشاط التجاري)');
+    }
+
+    // Verify target user exists to avoid DB constraint errors
+    const targetUser = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true },
     });
 
-    if (!targetBusiness) {
-      throw new Error('المستلم غير موجود');
+    if (!targetUser) {
+      throw new NotFoundException('المستلم غير موجود في النظام');
     }
 
     return this.notificationsService.sendPushNotification(
-      targetBusiness.userId,
+      targetUserId,
       body.title || `رسالة من ${user.fullName}`,
       body.body,
       { type: 'DIRECT_MESSAGE', senderId: user.userId },

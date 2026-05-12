@@ -262,7 +262,7 @@ export class SubscriptionsService {
     };
   }
 
-  async extendSubscription(businessId: string, adminId: string) {
+  async extendSubscription(businessId: string, adminId: string, days?: number) {
     const business = await this.prisma.business.findUnique({
       where: { id: businessId },
     });
@@ -271,9 +271,27 @@ export class SubscriptionsService {
       throw new NotFoundException('العمل غير موجود');
     }
 
-    const currentExpiry = business.subscriptionExpiry || new Date();
-    const newExpiry = new Date(currentExpiry);
-    newExpiry.setFullYear(newExpiry.getFullYear() + 1);
+    // Default to 365 days if days is not provided
+    const daysToAdd = days || 365;
+
+    // Use current date if expiry is missing or in the past, otherwise use existing expiry
+    const now = new Date();
+    const currentExpiry = business.subscriptionExpiry;
+    let baseDate = now;
+    
+    if (currentExpiry && currentExpiry > now) {
+      baseDate = currentExpiry;
+    } else if (!currentExpiry && business.createdAt) {
+      // If no expiry exists, check if trial is still active
+      const trialExpiry = new Date(business.createdAt);
+      trialExpiry.setDate(trialExpiry.getDate() + 90);
+      if (trialExpiry > now) {
+        baseDate = trialExpiry;
+      }
+    }
+
+    const newExpiry = new Date(baseDate);
+    newExpiry.setDate(newExpiry.getDate() + daysToAdd);
 
     const updated = await this.prisma.business.update({
       where: { id: businessId },

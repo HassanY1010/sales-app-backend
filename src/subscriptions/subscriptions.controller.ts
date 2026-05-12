@@ -59,8 +59,12 @@ export class SubscriptionsController {
   @Post('extend/:businessId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPER_ADMIN', 'ADMIN')
-  async extendSubscription(@Param('businessId') businessId: string, @Request() req: any) {
-    return this.subscriptionsService.extendSubscription(businessId, req.user.userId);
+  async extendSubscription(
+    @Param('businessId') businessId: string, 
+    @Request() req: any,
+    @Body() dto: { days?: number }
+  ) {
+    return this.subscriptionsService.extendSubscription(businessId, req.user.userId, dto?.days);
   }
 
   @Get('stats')

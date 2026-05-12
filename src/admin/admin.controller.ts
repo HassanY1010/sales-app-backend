@@ -150,6 +150,12 @@ export class AdminController {
     return this.adminService.getNotifications(query);
   }
 
+  @Get('notifications/count')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  getNotificationsCount(@Query('isRead') isRead?: string) {
+    return this.adminService.getNotificationsCount(isRead === 'true' ? true : isRead === 'false' ? false : undefined);
+  }
+
   @Post('notifications/send')
   @Roles('SUPER_ADMIN', 'ADMIN')
   sendNotification(
@@ -179,6 +185,22 @@ export class AdminController {
     @Query() query: PaginationDto & { userId?: string; action?: string; resource?: string },
   ) {
     return this.adminService.getAuditLogs(query);
+  }
+
+  // ==================== Suggestions ====================
+  @Get('suggestions')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  getSuggestions(@Query() query: PaginationDto & { status?: string }) {
+    return this.adminService.getSuggestions(query);
+  }
+
+  @Put('suggestions/:id/status')
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  updateSuggestionStatus(
+    @Param('id') id: string,
+    @Body('status') status: string,
+  ) {
+    return this.adminService.updateSuggestionStatus(id, status);
   }
 
   // ==================== Reports ====================

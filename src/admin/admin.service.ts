@@ -114,6 +114,13 @@ export class AdminService {
           isEmailVerified: true,
           createdAt: true,
           updatedAt: true,
+          business: {
+            select: {
+              id: true,
+              subscriptionStatus: true,
+              subscriptionExpiry: true,
+            },
+          },
         },
       }),
       this.prisma.user.count({ where }),
@@ -599,10 +606,62 @@ export class AdminService {
     };
   }
 
+  async getNotificationsCount(isRead?: boolean) {
+    const where: any = {};
+    if (isRead !== undefined) where.isRead = isRead;
+    const count = await this.prisma.notification.count({ where });
+    return { count };
+  }
+
   async markNotificationAsRead(notificationId: string) {
     return this.prisma.notification.update({
       where: { id: notificationId },
       data: { isRead: true },
+    });
+  }
+
+  // ==================== Suggestions ====================
+  async getSuggestions(query: PaginationDto & { status?: string }) {
+    const { page = 1, limit = 10, status } = query;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+    if (status) where.status = status;
+
+    const [suggestions, total] = await Promise.all([
+      this.prisma.suggestion.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phoneNumber: true,
+              userType: true,
+              business: {
+                select: { name: true }
+              }
+            }
+          }
+        },
+      }),
+      this.prisma.suggestion.count({ where }),
+    ]);
+
+    return {
+      data: suggestions,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async updateSuggestionStatus(suggestionId: string, status: string) {
+    return this.prisma.suggestion.update({
+      where: { id: suggestionId },
+      data: { status },
     });
   }
 

@@ -60,11 +60,14 @@ export class UsersService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+    this.logger.log(`Updating password for user ID: ${userId}`);
+    
     await this.prisma.user.update({
       where: { id: userId },
       data: { password: hashedPassword },
     });
 
+    this.logger.log(`Password updated successfully for user ID: ${userId}`);
     return { message: 'تم تغيير كلمة المرور بنجاح' };
   }
 
