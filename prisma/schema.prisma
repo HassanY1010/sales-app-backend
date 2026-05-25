@@ -207,7 +207,7 @@ model OrderItem {
 model Transaction {
   id              String  @id @default(uuid())
   transactionType String // PAYMENT, SALE, PURCHASE, ADJUSTMENT
-  voucherNumber   String? @unique
+  voucherNumber   String?
   amount          Decimal @db.Decimal(15, 2)
   currency        String  @default("YER")
   dueDate         DateTime?
