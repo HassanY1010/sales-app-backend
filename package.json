@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "engines": {
-    "node": "22.x"
+    "node": ">=20 <25"
   },
   "scripts": {
     "build": "nest build",
@@ -14,7 +14,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/src/main",
+    "start:prod": "node scripts/validate-runtime-env.js && node dist/src/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -22,7 +22,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "check:prod-env": "node scripts/validate-production-env.js",
-    "render:start": "npx prisma migrate deploy && npm run start:prod"
+    "render:start": "npx prisma db push --skip-generate && npm run start:prod"
   },
   "dependencies": {
     "@nestjs/config": "^4.0.4",
