@@ -14,6 +14,7 @@ export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
   @Post()
+  @Roles('business')
   async createTransaction(
     @CurrentUser() user: any,
     @Body() dto: CreateTransactionDto,

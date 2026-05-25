@@ -32,8 +32,30 @@ export class NotificationsController {
     @Body() body: { targetBusinessId?: string; targetUserId?: string; title?: string; body: string },
   ) {
     let targetUserId = body.targetUserId;
+    const isAdmin = ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'].includes(user.role);
+
+    if (targetUserId && !isAdmin) {
+      throw new BadRequestException('لا يمكن إرسال إشعار مباشر إلا عبر نشاط مرتبط');
+    }
 
     if (body.targetBusinessId) {
+      if (!isAdmin && body.targetBusinessId !== user.businessId) {
+        const connection = await this.prisma.connection.findFirst({
+          where: {
+            status: 'ACCEPTED',
+            OR: [
+              { requesterId: user.businessId, receiverId: body.targetBusinessId },
+              { requesterId: body.targetBusinessId, receiverId: user.businessId },
+            ],
+          },
+          select: { id: true },
+        });
+
+        if (!connection) {
+          throw new BadRequestException('لا يمكنك إرسال إشعار إلا لطرف مرتبط بحسابك');
+        }
+      }
+
       // Find the user ID of the target business
       const targetBusiness = await this.prisma.business.findUnique({
         where: { id: body.targetBusinessId },
@@ -60,7 +82,7 @@ export class NotificationsController {
       throw new NotFoundException('المستلم غير موجود في النظام');
     }
 
-    return this.notificationsService.sendPushNotification(
+    return this.notificationsService.notifyUser(
       targetUserId,
       body.title || `رسالة من ${user.fullName}`,
       body.body,

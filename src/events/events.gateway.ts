@@ -8,8 +8,22 @@ import { Server, Socket } from 'socket.io';
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
+const allowedSocketOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+    ];
+
 @Injectable()
-@WebSocketGateway({ cors: { origin: '*' } })
+@WebSocketGateway({
+  cors: {
+    origin: allowedSocketOrigins,
+    credentials: true,
+  },
+})
 export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
@@ -100,6 +114,11 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.server.to(socketId).emit(event, payload);
       });
     });
+  }
+
+  emitToUserBusiness(businessId: string | null | undefined, payload: any) {
+    if (!businessId) return;
+    this.emitToBusiness(businessId, 'notification:new', payload);
   }
 
   // Helper method to emit events to specific admin role

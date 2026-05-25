@@ -27,6 +27,10 @@ export class TransactionsService {
           type: dto.transactionType as any,
           orderId: dto.orderId,
           note: dto.note,
+          voucherNumber: dto.voucherNumber,
+          currency: dto.currency,
+          dueDate: dto.dueDate,
+          attachmentUrl: dto.attachmentUrl,
         },
       );
 
@@ -58,7 +62,14 @@ export class TransactionsService {
     ]);
 
     return {
-      data,
+      data: data.map((transaction) => ({
+        ...transaction,
+        direction: transaction.receiverId === businessId ? 'credit' : 'debit',
+        relatedUserId: transaction.senderId === businessId ? transaction.receiverId : transaction.senderId,
+        relatedUserName: transaction.senderId === businessId
+          ? transaction.receiver.name
+          : transaction.sender.name,
+      })),
       meta: {
         total,
         page,

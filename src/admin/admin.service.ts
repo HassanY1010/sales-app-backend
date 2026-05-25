@@ -7,12 +7,16 @@ import { AdminOrdersQueryDto } from './dto/admin-order.dto';
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
 import Decimal from 'decimal.js';
 import * as bcrypt from 'bcrypt';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   // ==================== Dashboard Stats ====================
   async getDashboardStats() {
@@ -198,20 +202,23 @@ export class AdminService {
       throw new NotFoundException('المستخدم غير موجود');
     }
 
-    // Default password for reset
-    const defaultPassword = 'User123456';
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+    const temporaryPassword = this.generateTemporaryPassword();
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 12);
 
     await this.prisma.user.update({
       where: { id: userId },
       data: { password: hashedPassword },
     });
-
-    await this.logAdminAction(adminId, 'RESET_USER_PASSWORD', 'USER', userId, {
-      message: 'Password reset to default',
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
 
-    return { success: true, message: 'تم إعادة تعيين كلمة المرور إلى: User123456' };
+    await this.logAdminAction(adminId, 'RESET_USER_PASSWORD', 'USER', userId, {
+      message: 'Password reset to temporary password and active sessions revoked',
+    });
+
+    return { success: true, temporaryPassword };
   }
 
   // ==================== Businesses Management ====================
@@ -557,22 +564,32 @@ export class AdminService {
   }
 
   // ==================== Notifications ====================
-  async sendNotification(userId: string, title: string, body: string, type?: string) {
-    const notification = await this.prisma.notification.create({
-      data: { userId, title, body, type },
-    });
+  async sendNotification(adminId: string, userId: string, title: string, body: string, type?: string) {
+    const notification = await this.notificationsService.notifyUser(
+      userId,
+      title,
+      body,
+      { type: type || 'ADMIN_MESSAGE', senderId: adminId },
+    );
 
-    await this.logAdminAction(userId, 'SEND_NOTIFICATION', 'NOTIFICATION', notification.id, { title, body, type });
+    await this.logAdminAction(adminId, 'SEND_NOTIFICATION', 'NOTIFICATION', notification.id, { userId, title, body, type });
 
     return notification;
   }
 
-  async sendBulkNotification(userIds: string[], title: string, body: string, type?: string) {
-    const notifications = await this.prisma.notification.createMany({
-      data: userIds.map(userId => ({ userId, title, body, type })),
-    });
+  async sendBulkNotification(adminId: string, userIds: string[], title: string, body: string, type?: string) {
+    const notifications = await Promise.all(
+      userIds.map((userId) =>
+        this.notificationsService.notifyUser(
+          userId,
+          title,
+          body,
+          { type: type || 'ADMIN_MESSAGE', senderId: adminId },
+        ),
+      ),
+    );
 
-    await this.logAdminAction(userIds[0], 'SEND_BULK_NOTIFICATION', 'NOTIFICATION', null, {
+    await this.logAdminAction(adminId, 'SEND_BULK_NOTIFICATION', 'NOTIFICATION', null, {
       userCount: userIds.length,
       title,
       body,
@@ -736,6 +753,63 @@ export class AdminService {
     });
   }
 
+  async getOperationsSummary() {
+    const [
+      users,
+      inactiveUsers,
+      pendingOrders,
+      rejectedOrders,
+      pendingConnections,
+      failedPaymentRequests,
+      unreadNotifications,
+      recentAuditLogs,
+      refreshTokenCount,
+      activeRefreshTokenCount,
+    ] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { isActive: false } }),
+      this.prisma.order.count({ where: { status: 'PENDING' } }),
+      this.prisma.order.count({ where: { status: 'REJECTED' } }),
+      this.prisma.connection.count({ where: { status: 'PENDING' } }),
+      this.prisma.paymentRequest.count({ where: { status: 'REJECTED' } }),
+      this.prisma.notification.count({ where: { isRead: false } }),
+      this.prisma.auditLog.findMany({
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+        include: { user: { select: { id: true, fullName: true, email: true } } },
+      }),
+      this.prisma.refreshToken.count(),
+      this.prisma.refreshToken.count({
+        where: { revokedAt: null, expiresAt: { gt: new Date() } },
+      }),
+    ]);
+
+    return {
+      health: {
+        status: 'ok',
+        checkedAt: new Date().toISOString(),
+        database: 'connected',
+      },
+      security: {
+        corsConfigured: Boolean(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN),
+        jwtSecretConfigured: Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32),
+        refreshTokensEnabled: true,
+        activeSessions: activeRefreshTokenCount,
+        totalRefreshTokens: refreshTokenCount,
+      },
+      workload: {
+        users,
+        inactiveUsers,
+        pendingOrders,
+        rejectedOrders,
+        pendingConnections,
+        failedPaymentRequests,
+        unreadNotifications,
+      },
+      recentAuditLogs,
+    };
+  }
+
   // ==================== Private Helpers ====================
   private async logAdminAction(
     adminId: string,
@@ -753,5 +827,9 @@ export class AdminService {
         details,
       },
     });
+  }
+
+  private generateTemporaryPassword() {
+    return `Tmp-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}!`;
   }
 }

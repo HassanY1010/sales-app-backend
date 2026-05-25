@@ -42,11 +42,30 @@ model User {
   paymentRequests PaymentRequest[]
   approvedPayments PaymentRequest[] @relation("ApprovedPayments")
   subscriptions    UserSubscription[]
+  refreshTokens    RefreshToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ipAddress String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId], name: "refresh_tokens_user_idx")
+  @@index([expiresAt], name: "refresh_tokens_expires_idx")
+  @@map("refresh_tokens")
 }
 
 model Business {
@@ -79,6 +98,8 @@ model Business {
   
   paymentRequests PaymentRequest[]
   subscriptions    UserSubscription[]
+  cloudBackupCredential CloudBackupCredential?
+  cloudBackupRecords    CloudBackupRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -122,6 +143,7 @@ model Account {
   creditLimit  Decimal @default(100000) @db.Decimal(15, 2) // سقف المديونية
   billingCycle String? // WEEKLY, MONTHLY, etc.
   currency     String  @default("YER")
+  dueDate      DateTime?
 
   // Relations
   connection Connection @relation(fields: [connectionId], references: [id])
@@ -138,6 +160,10 @@ model Order {
   receiverId  String
   status      String @default("PENDING") // PENDING, ACCEPTED, REJECTED, COMPLETED, CANCELLED
   isCash      Boolean @default(false) // Cash or Credit order (نقدي / آجل)
+  currency    String @default("YER")
+  dueDate     DateTime?
+  pricesVisible Boolean @default(true)
+  priceAcceptedAt DateTime?
 
   subtotal Decimal @default(0.00) @db.Decimal(15, 2)
   tax      Decimal @default(0.00) @db.Decimal(15, 2)
@@ -181,7 +207,12 @@ model OrderItem {
 model Transaction {
   id              String  @id @default(uuid())
   transactionType String // PAYMENT, SALE, PURCHASE, ADJUSTMENT
+  voucherNumber   String? @unique
   amount          Decimal @db.Decimal(15, 2)
+  currency        String  @default("YER")
+  dueDate         DateTime?
+  attachmentUrl   String?
+  balanceAfter    Decimal? @db.Decimal(15, 2)
   senderId        String
   receiverId      String
   orderId         String?
@@ -222,13 +253,54 @@ model AuditLog {
   resourceId String?
   details    Json?
   ipAddress  String?
+  method     String?
+  path       String?
+  statusCode Int?
+  businessId String?
 
   // Relations
   user User? @relation(fields: [userId], references: [id])
 
   createdAt DateTime @default(now())
 
+  @@index([businessId], name: "audit_logs_business_idx")
+  @@index([createdAt], name: "audit_logs_created_at_idx")
   @@map("audit_logs")
+}
+
+model CloudBackupCredential {
+  id           String   @id @default(uuid())
+  businessId   String   @unique
+  provider     String   @default("GOOGLE_DRIVE")
+  refreshToken String   @db.Text
+  email        String?
+  scope        String?
+  expiresAt    DateTime?
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("cloud_backup_credentials")
+}
+
+model CloudBackupRecord {
+  id         String   @id @default(uuid())
+  businessId String
+  provider   String   @default("GOOGLE_DRIVE")
+  fileId     String
+  fileName   String
+  fileSize   Int?
+  checksum   String?
+  status     String   @default("UPLOADED")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([businessId], name: "cloud_backup_records_business_idx")
+  @@map("cloud_backup_records")
 }
 
 model Expense {

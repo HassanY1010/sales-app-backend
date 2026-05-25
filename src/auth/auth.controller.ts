@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Logger, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -9,13 +10,23 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  async register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  async register(@Body() dto: RegisterDto, @Req() req: Request) {
+    return this.authService.register(dto, req.ip, req.headers['user-agent']);
   }
 
   @Post('login')
-  async login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  async login(@Body() dto: LoginDto, @Req() req: Request) {
+    return this.authService.login(dto, req.ip, req.headers['user-agent']);
+  }
+
+  @Post('refresh')
+  async refresh(@Body() body: { refreshToken: string }, @Req() req: Request) {
+    return this.authService.refresh(body.refreshToken, req.ip, req.headers['user-agent']);
+  }
+
+  @Post('logout')
+  async logout(@Body() body: { refreshToken?: string }) {
+    return this.authService.logout(body.refreshToken);
   }
 
   @Post('verify-reset-pin')

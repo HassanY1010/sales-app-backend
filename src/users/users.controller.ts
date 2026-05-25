@@ -31,6 +31,11 @@ export class UsersController {
     return this.usersService.changeSecurityPin(user.userId, body.pin);
   }
 
+  @Post('me/push-token')
+  async updatePushToken(@CurrentUser() user: any, @Body() body: { pushToken: string }) {
+    return this.usersService.updatePushToken(user.userId, body.pushToken);
+  }
+
   @Post('me/logo')
   @UseInterceptors(FileInterceptor('file'))
   async uploadLogo(@CurrentUser() user: any, @UploadedFile() file: any) {

@@ -10,7 +10,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { ConnectionsService } from './connections.service';
-import { CreateConnectionDto } from './dto/create-connection.dto';
+import { AcceptConnectionDto, CreateConnectionDto } from './dto/create-connection.dto';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
@@ -38,11 +38,12 @@ export class ConnectionsController {
   async acceptConnection(
     @CurrentUser() user: any,
     @Param('id') connectionId: string,
+    @Body() body: AcceptConnectionDto,
   ) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.acceptConnection(user.businessId, connectionId);
+    return this.connectionsService.acceptConnection(user.businessId, connectionId, body);
   }
 
   @Patch(':id/reject')
@@ -91,6 +92,7 @@ export class ConnectionsController {
   }
 
   @Post('manual-add')
+  @Roles('business')
   async manualAdd(
     @CurrentUser() user: any,
     @Body() body: any,
@@ -102,6 +104,7 @@ export class ConnectionsController {
   }
 
   @Patch(':id/toggle-show-prices')
+  @Roles('business')
   async toggleShowPrices(
     @CurrentUser() user: any,
     @Param('id') connectionId: string,

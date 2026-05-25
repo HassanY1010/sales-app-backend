@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { Decimal } from 'decimal.js';
 import { Prisma } from '@prisma/client';
@@ -33,6 +33,10 @@ export class FinanceService {
       type: TransactionType;
       orderId?: string;
       note?: string;
+      voucherNumber?: string;
+      currency?: string;
+      dueDate?: string | Date;
+      attachmentUrl?: string;
       userId?: string; // For audit logging
     },
   ) {
@@ -112,7 +116,12 @@ export class FinanceService {
     const transaction = await tx.transaction.create({
       data: {
         transactionType: type,
+        voucherNumber: params.voucherNumber || this.generateVoucherNumber(type),
         amount: decimalAmount.toString(),
+        currency: params.currency || connection.account.currency || 'YER',
+        dueDate: params.dueDate ? new Date(params.dueDate) : connection.account.dueDate,
+        attachmentUrl: params.attachmentUrl,
+        balanceAfter: newBalance.toString(),
         senderId,
         receiverId,
         orderId,
@@ -132,6 +141,10 @@ export class FinanceService {
           amount: decimalAmount.toString(),
           senderId,
           receiverId,
+          voucherNumber: params.voucherNumber,
+          currency: params.currency || connection.account.currency || 'YER',
+          dueDate: params.dueDate,
+          attachmentUrl: params.attachmentUrl,
           newBalance: newBalance.toString(),
         },
       },
@@ -141,6 +154,16 @@ export class FinanceService {
     await this.notifyFinancialMovement(params, newBalance);
 
     return { transaction, newBalance };
+  }
+
+  private generateVoucherNumber(type: TransactionType) {
+    const prefixMap: Record<TransactionType, string> = {
+      PAYMENT: 'PAY',
+      SALE: 'INV',
+      PURCHASE: 'PUR',
+      ADJUSTMENT: 'ADJ',
+    };
+    return `${prefixMap[type]}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
   }
 
   private async notifyFinancialMovement(params: any, newBalance: Decimal) {
@@ -243,5 +266,3 @@ export class FinanceService {
     });
   }
 }
-
-import { NotFoundException } from '@nestjs/common';

@@ -17,7 +17,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "check:prod-env": "node scripts/validate-production-env.js"
   },
   "dependencies": {
     "@nestjs/config": "^4.0.4",
@@ -33,6 +34,7 @@
     "class-validator": "^0.15.1",
     "decimal.js": "^10.6.0",
     "firebase-admin": "^13.8.0",
+    "googleapis": "^172.0.0",
     "helmet": "^8.1.0",
     "nest-winston": "^1.10.2",
     "passport": "^0.7.0",
@@ -92,5 +94,8 @@
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

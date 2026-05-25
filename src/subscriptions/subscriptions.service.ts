@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class SubscriptionsService {
@@ -9,6 +10,7 @@ export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventsGateway: EventsGateway,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createPaymentRequest(userId: string, dto: { wallet: string; amount: number; notes?: string }) {
@@ -36,14 +38,18 @@ export class SubscriptionsService {
       },
     });
 
-    await this.prisma.notification.create({
-      data: {
-        userId: userId,
-        title: 'طلب تفعيل جديد',
-        body: `تم استلام طلب دفع بمبلغ ${dto.amount} عبر ${dto.wallet}`,
-        type: 'PAYMENT_REQUEST',
-      },
-    });
+    await this.notificationsService.notifyUser(
+      userId,
+      'طلب تفعيل جديد',
+      `تم استلام طلب دفع بمبلغ ${dto.amount} عبر ${dto.wallet}`,
+      { type: 'PAYMENT_REQUEST', paymentRequestId: paymentRequest.id },
+    );
+
+    await this.notificationsService.notifyAdmins(
+      'طلب تفعيل جديد',
+      `طلب دفع جديد من ${user.fullName} بمبلغ ${dto.amount}`,
+      { type: 'ADMIN_PAYMENT_REQUEST', paymentRequestId: paymentRequest.id },
+    );
 
     // Emit real-time notification to admin dashboard via WebSocket
     this.eventsGateway.emitToAllAdmins('admin-payment-request', {
@@ -130,15 +136,6 @@ export class SubscriptionsService {
         data: { isActive: true },
       });
 
-      await tx.notification.create({
-        data: {
-          userId: request.userId,
-          title: 'تم تفعيل الاشتراك',
-          body: 'تم تفعيل اشتراكك بنجاح! اشتراكك صالح لمدة سنة.',
-          type: 'SUBSCRIPTION_ACTIVATED',
-        },
-      });
-
       await tx.auditLog.create({
         data: {
           userId: adminId,
@@ -152,6 +149,13 @@ export class SubscriptionsService {
         },
       });
     });
+
+    await this.notificationsService.notifyUser(
+      request.userId,
+      'تم تفعيل الاشتراك',
+      'تم تفعيل اشتراكك بنجاح! اشتراكك صالح لمدة سنة.',
+      { type: 'SUBSCRIPTION_ACTIVATED', paymentRequestId: requestId },
+    );
 
     // Emit real-time update to user if connected
     if (request.businessId) {
@@ -188,14 +192,12 @@ export class SubscriptionsService {
       },
     });
 
-    await this.prisma.notification.create({
-      data: {
-        userId: request.userId,
-        title: 'تم رفض طلب الدفع',
-        body: 'تم رفض طلب الدفع. يرجى التواصل مع الدعم.',
-        type: 'PAYMENT_REJECTED',
-      },
-    });
+    await this.notificationsService.notifyUser(
+      request.userId,
+      'تم رفض طلب الدفع',
+      'تم رفض طلب الدفع. يرجى التواصل مع الدعم.',
+      { type: 'PAYMENT_REJECTED', paymentRequestId: requestId, reason },
+    );
 
     this.logger.log(`Payment request ${requestId} rejected by admin ${adminId}`);
 
@@ -301,14 +303,12 @@ export class SubscriptionsService {
       },
     });
 
-    await this.prisma.notification.create({
-      data: {
-        userId: business.userId,
-        title: 'تم تمديد الاشتراك',
-        body: 'تم تمديد اشتراكك لمدة سنة إضافية.',
-        type: 'SUBSCRIPTION_EXTENDED',
-      },
-    });
+    await this.notificationsService.notifyUser(
+      business.userId,
+      'تم تمديد الاشتراك',
+      'تم تمديد اشتراكك لمدة سنة إضافية.',
+      { type: 'SUBSCRIPTION_EXTENDED', businessId, expiryDate: newExpiry },
+    );
 
     this.eventsGateway.emitToBusiness(businessId, 'subscription-extended', {
       expiryDate: newExpiry,

@@ -9,6 +9,8 @@ import { PrismaService } from '../database/prisma.service';
 import { CreateConnectionDto } from './dto/create-connection.dto';
 import { Decimal } from 'decimal.js';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -24,6 +26,15 @@ export class ConnectionsService {
   async createConnection(businessId: string, dto: CreateConnectionDto) {
     if (businessId === dto.receiverId) {
       throw new BadRequestException('لا يمكنك الارتباط بنفسك');
+    }
+
+    const receiver = await this.prisma.business.findUnique({
+      where: { id: dto.receiverId },
+      include: { user: true },
+    });
+
+    if (!receiver || !receiver.user.isActive) {
+      throw new NotFoundException('الحساب المطلوب غير موجود أو غير نشط');
     }
 
     const connection = await this.prisma.connection.findFirst({
@@ -68,6 +79,7 @@ export class ConnectionsService {
             status: 'PENDING',
             requesterId: businessId, // Ensure the new requester is current user
             receiverId: dto.receiverId,
+            connectionType: dto.connectionType,
             retryCount: { increment: 1 },
             lastRequestedAt: new Date(),
           },
@@ -148,15 +160,27 @@ export class ConnectionsService {
         where: { id: connectionId },
         data: {
           status: 'ACCEPTED',
-          account: !existingAccount ? {
-            create: {
-              balance: openingBalance,
-              totalCredit: openingBalance > 0 ? openingBalance : 0,
-              totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
-              creditLimit,
-              billingCycle,
-            },
-          } : undefined, // If account already exists, we just update status to ACCEPTED
+          account: existingAccount
+            ? {
+                update: {
+                  creditLimit,
+                  billingCycle,
+                  ...(openingBalance !== 0 && {
+                    balance: openingBalance,
+                    totalCredit: openingBalance > 0 ? openingBalance : 0,
+                    totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+                  }),
+                },
+              }
+            : {
+                create: {
+                  balance: openingBalance,
+                  totalCredit: openingBalance > 0 ? openingBalance : 0,
+                  totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+                  creditLimit,
+                  billingCycle,
+                },
+              },
           showPrices,
         },
         include: {
@@ -292,8 +316,14 @@ export class ConnectionsService {
       this.prisma.connection.count({ where }),
     ]);
 
+    const normalizedData = data.map((connection) => ({
+      ...connection,
+      business: connection.requesterId === businessId ? connection.receiver : connection.requester,
+      direction: connection.requesterId === businessId ? 'SENT' : 'RECEIVED',
+    }));
+
     return {
-      data,
+      data: normalizedData,
       meta: {
         total,
         page,
@@ -372,7 +402,17 @@ export class ConnectionsService {
     });
   }
   async manualAddConnection(myBusinessId: string, dto: any) {
-    const { phoneNumber, name, businessName, connectionType = 'CUSTOMER' } = dto;
+    const {
+      phoneNumber,
+      name,
+      businessName,
+      email,
+      connectionType = 'CUSTOMER',
+      creditLimit,
+      billingCycle,
+      openingBalance,
+      showPrices,
+    } = dto;
 
     let targetBusiness = await this.prisma.business.findFirst({
       where: { phoneNumber: phoneNumber },
@@ -384,13 +424,15 @@ export class ConnectionsService {
       });
 
       if (!targetUser) {
+        const shadowPassword = await bcrypt.hash(randomBytes(32).toString('hex'), 12);
         targetUser = await this.prisma.user.create({
           data: {
             phoneNumber: phoneNumber,
             fullName: name,
-            email: `shadow_${phoneNumber}@local`,
-            password: 'placeholder_password',
+            email: email || `shadow_${phoneNumber}_${randomBytes(4).toString('hex')}@local.invalid`,
+            password: shadowPassword,
             userType: 'individual',
+            isActive: false,
           },
         });
       }
@@ -399,6 +441,7 @@ export class ConnectionsService {
         data: {
           name: businessName || name,
           phoneNumber: phoneNumber,
+          email,
           userId: targetUser.id,
           businessType: 'Shadow',
         },
@@ -427,12 +470,19 @@ export class ConnectionsService {
           account: {
             upsert: {
               create: { balance: 0, creditLimit: 100000 },
-              update: {},
+              update: {
+                ...(creditLimit !== undefined && { creditLimit }),
+                ...(billingCycle !== undefined && { billingCycle }),
+              },
             },
           },
+          ...(showPrices !== undefined && { showPrices }),
         },
       });
     }
+
+    const initialBalance = Number(openingBalance ?? 0);
+    const accountCreditLimit = Number(creditLimit ?? 100000);
 
     return this.prisma.connection.create({
       data: {
@@ -440,11 +490,17 @@ export class ConnectionsService {
         receiverId: targetBusiness.id,
         status: 'ACCEPTED',
         connectionType: connectionType,
+        showPrices: showPrices ?? false,
         account: {
-          create: { balance: 0, creditLimit: 100000 },
+          create: {
+            balance: initialBalance,
+            totalCredit: initialBalance > 0 ? initialBalance : 0,
+            totalDebit: initialBalance < 0 ? Math.abs(initialBalance) : 0,
+            creditLimit: accountCreditLimit,
+            billingCycle,
+          },
         },
       },
     });
   }
 }
-

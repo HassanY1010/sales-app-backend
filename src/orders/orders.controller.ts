@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { UpdateOrderPricesDto, UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -29,7 +29,7 @@ export class OrdersController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.ordersService.createOrder(user.businessId, dto);
+    return this.ordersService.createOrder(user.businessId, dto, user.userType);
   }
 
   @Get()
@@ -60,6 +60,18 @@ export class OrdersController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.ordersService.updateOrderStatus(user.businessId, id, dto);
+    return this.ordersService.updateOrderStatus(user.businessId, id, dto, user.userType);
+  }
+
+  @Patch(':id/prices')
+  async updateOrderPrices(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderPricesDto,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.ordersService.updateOrderPrices(user.businessId, id, dto, user.userType);
   }
 }

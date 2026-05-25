@@ -3,6 +3,12 @@ import * as admin from 'firebase-admin';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import { EventsGateway } from '../events/events.gateway';
+
+type NotificationPayload = {
+  type?: string;
+  [key: string]: any;
+};
 
 @Injectable()
 export class NotificationsService {
@@ -12,6 +18,7 @@ export class NotificationsService {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    private eventsGateway: EventsGateway,
   ) {
     this.initializeFirebase();
   }
@@ -21,7 +28,13 @@ export class NotificationsService {
     const privateKey = this.configService.get<string>('FCM_PRIVATE_KEY')?.replace(/\\n/g, '\n');
     const clientEmail = this.configService.get<string>('FCM_CLIENT_EMAIL');
 
-    if (projectId && privateKey && clientEmail) {
+    if (
+      admin.apps.length === 0 &&
+      projectId &&
+      privateKey &&
+      privateKey.includes('BEGIN PRIVATE KEY') &&
+      clientEmail
+    ) {
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
@@ -32,7 +45,40 @@ export class NotificationsService {
       this.isFirebaseInitialized = true;
       this.logger.log('Firebase Admin Initialized Successfully');
     } else {
-      this.logger.warn('Firebase Admin credentials not fully provided format. Push notifications will be skipped.');
+      this.isFirebaseInitialized = admin.apps.length > 0;
+      if (!this.isFirebaseInitialized) {
+        this.logger.warn('Firebase Admin credentials not configured. Database and socket notifications remain active.');
+      }
+    }
+  }
+
+  private toFcmData(data?: NotificationPayload): Record<string, string> {
+    if (!data) return {};
+    return Object.entries(data).reduce<Record<string, string>>((acc, [key, value]) => {
+      if (value === undefined || value === null) return acc;
+      acc[key] = typeof value === 'string' ? value : JSON.stringify(value);
+      return acc;
+    }, {});
+  }
+
+  private async sendFcm(userId: string, title: string, body: string, data?: NotificationPayload) {
+    if (!this.isFirebaseInitialized) return;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { pushToken: true },
+    });
+
+    if (!user?.pushToken) return;
+
+    try {
+      await admin.messaging().send({
+        token: user.pushToken,
+        notification: { title, body },
+        data: this.toFcmData(data),
+      });
+    } catch (error) {
+      this.logger.error(`Failed to send push notification: ${error.message}`);
     }
   }
 
@@ -40,10 +86,18 @@ export class NotificationsService {
     userId: string,
     title: string,
     body: string,
-    data?: any,
+    data?: NotificationPayload,
   ) {
-    // 1. Save to database
-    await this.prisma.notification.create({
+    return this.notifyUser(userId, title, body, data);
+  }
+
+  async notifyUser(
+    userId: string,
+    title: string,
+    body: string,
+    data?: NotificationPayload,
+  ) {
+    const notification = await this.prisma.notification.create({
       data: {
         userId,
         title,
@@ -52,28 +106,59 @@ export class NotificationsService {
       },
     });
 
-    if (!this.isFirebaseInitialized) return;
-
-    // 2. Fetch User pushToken
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { pushToken: true },
+      select: { business: { select: { id: true } } },
     });
 
-    if (user?.pushToken) {
-      try {
-        await admin.messaging().send({
-          token: user.pushToken,
-          notification: {
-            title,
-            body,
-          },
-          data: data || {},
-        });
-      } catch (error) {
-        this.logger.error(`Failed to send push notification: ${error.message}`);
-      }
-    }
+    const payload = {
+      ...notification,
+      data: data ?? {},
+    };
+
+    this.eventsGateway.emitToUserBusiness(user?.business?.id, payload);
+    await this.sendFcm(userId, title, body, data);
+
+    return notification;
+  }
+
+  async notifyBusiness(
+    businessId: string,
+    title: string,
+    body: string,
+    data?: NotificationPayload,
+  ) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+      select: { userId: true },
+    });
+
+    if (!business) return null;
+    return this.notifyUser(business.userId, title, body, data);
+  }
+
+  async notifyAdmins(
+    title: string,
+    body: string,
+    data?: NotificationPayload,
+  ) {
+    const admins = await this.prisma.user.findMany({
+      where: { role: { in: ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'] }, isActive: true },
+      select: { id: true },
+    });
+
+    const notifications = await Promise.all(
+      admins.map((adminUser) => this.notifyUser(adminUser.id, title, body, data)),
+    );
+
+    this.eventsGateway.emitToAllAdmins('notification:new', {
+      title,
+      body,
+      data: data ?? {},
+      createdAt: new Date().toISOString(),
+    });
+
+    return notifications;
   }
 
   async getUserNotifications(userId: string, pagination: PaginationDto) {

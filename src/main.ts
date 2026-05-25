@@ -9,6 +9,20 @@ import { WinstonModule } from 'nest-winston';
 import * as winston from 'winston';
 import { utilities as nestWinstonModuleUtilities } from 'nest-winston';
 
+function resolveCorsOrigins() {
+  const configured = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '';
+  const origins = configured
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (process.env.NODE_ENV === 'production' && origins.length === 0) {
+    throw new Error('CORS_ORIGINS must be configured in production');
+  }
+
+  return origins.length > 0 ? origins : ['http://localhost:5173', 'http://localhost:3000'];
+}
+
 async function bootstrap() {
   const logger = WinstonModule.createLogger({
     transports: [
@@ -59,8 +73,14 @@ async function bootstrap() {
   app.useGlobalFilters(new AllExceptionsFilter());
 
   // Enable Strict CORS
+  const allowedOrigins = resolveCorsOrigins();
   app.enableCors({
-    origin: true, // This will reflect the request origin
+    origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('CORS origin denied'), false);
+    },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     allowedHeaders: 'Content-Type,Accept,Authorization,x-idempotency-key',

@@ -40,6 +40,12 @@ export class AdminController {
     return this.adminService.getDashboardStats();
   }
 
+  @Get('operations/summary')
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  getOperationsSummary() {
+    return this.adminService.getOperationsSummary();
+  }
+
   // ==================== Users ====================
   @Get('users')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
@@ -160,16 +166,18 @@ export class AdminController {
   @Roles('SUPER_ADMIN', 'ADMIN')
   sendNotification(
     @Body() dto: { userId: string; title: string; body: string; type?: string },
+    @Request() req: any,
   ) {
-    return this.adminService.sendNotification(dto.userId, dto.title, dto.body, dto.type);
+    return this.adminService.sendNotification(req.user.userId, dto.userId, dto.title, dto.body, dto.type);
   }
 
   @Post('notifications/send-bulk')
   @Roles('SUPER_ADMIN', 'ADMIN')
   sendBulkNotification(
     @Body() dto: { userIds: string[]; title: string; body: string; type?: string },
+    @Request() req: any,
   ) {
-    return this.adminService.sendBulkNotification(dto.userIds, dto.title, dto.body, dto.type);
+    return this.adminService.sendBulkNotification(req.user.userId, dto.userIds, dto.title, dto.body, dto.type);
   }
 
   @Put('notifications/:id/read')

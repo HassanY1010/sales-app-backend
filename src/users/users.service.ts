@@ -85,4 +85,17 @@ export class UsersService {
 
     return { message: 'تم تغيير رمز الأمان بنجاح' };
   }
+
+  async updatePushToken(userId: string, pushToken: string) {
+    if (!pushToken || pushToken.trim().length < 20) {
+      throw new BadRequestException('رمز الإشعارات غير صالح');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { pushToken: pushToken.trim() },
+    });
+
+    return { message: 'تم تحديث رمز الإشعارات بنجاح' };
+  }
 }

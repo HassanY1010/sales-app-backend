@@ -1,8 +1,7 @@
-import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class CreateConnectionDto {
-  @IsString()
-  @IsNotEmpty()
+  @IsUUID()
   receiverId: string;
 
   @IsEnum(['CUSTOMER', 'SUPPLIER'])
@@ -15,9 +14,30 @@ export class CreateConnectionDto {
 
   @IsString()
   @IsOptional()
-  billingCycle?: string; // WEEKLY, MONTHLY, CUSTOM
+  billingCycle?: string;
 
   @IsNumber()
   @IsOptional()
-  openingBalance?: number; // رصيد افتتاحي
+  openingBalance?: number;
+
+  @IsOptional()
+  showPrices?: boolean;
+}
+
+export class AcceptConnectionDto {
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  creditLimit?: number;
+
+  @IsString()
+  @IsOptional()
+  billingCycle?: string;
+
+  @IsNumber()
+  @IsOptional()
+  openingBalance?: number;
+
+  @IsOptional()
+  showPrices?: boolean;
 }

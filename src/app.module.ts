@@ -18,6 +18,8 @@ import { AdminModule } from './admin/admin.module';
 import { BackupModule } from './backup/backup.module';
 import { MonitoringModule } from './monitoring/monitoring.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { BusinessesModule } from './businesses/businesses.module';
+import { AuditModule } from './audit/audit.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -32,6 +34,7 @@ import { AppService } from './app.service';
       limit: 100, // 100 requests per minute
     }]),
     DatabaseModule,
+    AuditModule,
     AuthModule,
     UsersModule,
     ConnectionsModule,
@@ -46,6 +49,7 @@ import { AppService } from './app.service';
     BackupModule,
     MonitoringModule,
     SubscriptionsModule,
+    BusinessesModule,
   ],
   controllers: [AppController],
   providers: [

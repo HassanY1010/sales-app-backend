@@ -12,6 +12,7 @@ export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
   @Get('debts')
+  @Roles('business')
   async getDebts(@CurrentUser() user: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
@@ -44,6 +45,7 @@ export class ReportsController {
   }
 
   @Get('weekly-sales')
+  @Roles('business')
   async getWeeklySales(@CurrentUser() user: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
