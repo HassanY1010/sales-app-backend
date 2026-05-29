@@ -16,6 +16,10 @@ export class CreateConnectionDto {
   @IsOptional()
   billingCycle?: string;
 
+  @IsString()
+  @IsOptional()
+  dueDate?: string;
+
   @IsNumber()
   @IsOptional()
   openingBalance?: number;
@@ -33,6 +37,10 @@ export class AcceptConnectionDto {
   @IsString()
   @IsOptional()
   billingCycle?: string;
+
+  @IsString()
+  @IsOptional()
+  dueDate?: string;
 
   @IsNumber()
   @IsOptional()

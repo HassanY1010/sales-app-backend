@@ -170,7 +170,7 @@ export class FinanceService {
     const { senderId, receiverId, amount, type, note } = params;
     
     // Fetch participants for notification
-    const sender = await this.prisma.business.findUnique({ where: { id: senderId } });
+    const sender = await this.prisma.business.findUnique({ where: { id: senderId }, include: { user: true } });
     const receiver = await this.prisma.business.findUnique({ where: { id: receiverId }, include: { user: true } });
 
     if (!receiver) return;
@@ -212,6 +212,23 @@ export class FinanceService {
         senderName: sender?.name,
         note,
       });
+
+      if (type === 'PAYMENT' && sender?.user?.id) {
+        await this.notificationsService.sendPushNotification(
+          sender.user.id,
+          'تم تسجيل سند قبض',
+          `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
+          { type: 'PAYMENT_RECEIVED', amount: amountStr, transactionType: type }
+        );
+
+        this.eventsGateway.emitToBusiness(senderId, 'FINANCIAL_UPDATE', {
+          type,
+          amount: amountStr,
+          newBalance: newBalance.toString(),
+          receiverName: receiver.name,
+          note,
+        });
+      }
     }
   }
 

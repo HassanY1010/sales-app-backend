@@ -35,4 +35,12 @@ export class TransactionsController {
     }
     return this.transactionsService.getTransactions(user.businessId, pagination);
   }
+
+  @Get('summary')
+  async getTransactionsSummary(@CurrentUser() user: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.transactionsService.getTransactionsSummary(user.businessId);
+  }
 }

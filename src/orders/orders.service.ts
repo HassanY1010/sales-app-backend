@@ -55,7 +55,7 @@ export class OrdersService {
       throw new ForbiddenException('المستهلك يمكنه إرسال طلبيات شراء لحسابات تجارية فقط');
     }
 
-    const pricesVisible = connection.showPrices || userType === 'business';
+    const pricesVisible = dto.pricesVisible ?? (connection.showPrices || userType === 'business');
     let subtotal = new Decimal(0);
     const itemsData = dto.items.map((item) => {
       const unitPrice = pricesVisible ? new Decimal(item.unitPrice || '0') : new Decimal(0);
@@ -72,6 +72,9 @@ export class OrdersService {
     const discountAmount = new Decimal(dto.discount || '0');
     const finalTotal = subtotal.plus(taxAmount).minus(discountAmount);
     const isCash = dto.isCash ?? false;
+    const paidAmount = isCash
+      ? finalTotal
+      : Decimal.min(new Decimal(dto.paidAmount || '0'), finalTotal);
 
     if (!isCash && pricesVisible) {
       const currentDebit = new Decimal(connection.account.totalDebit as any);
@@ -103,6 +106,7 @@ export class OrdersService {
           subtotal: subtotal.toString(),
           tax: taxAmount.toString(),
           discount: discountAmount.toString(),
+          paidAmount: paidAmount.toString(),
           total: finalTotal.toString(),
           notes: dto.notes,
           items: { create: itemsData },
@@ -157,6 +161,7 @@ export class OrdersService {
           details: {
             orderNumber,
             total: finalTotal.toString(),
+            paidAmount: paidAmount.toString(),
             isCash,
             currency,
             dueDate,
@@ -328,6 +333,38 @@ export class OrdersService {
 
     if (dto.status === 'ACCEPTED' && !order.isCash) {
       const updated = await this.prisma.$transaction(async (prisma) => {
+        // --- FIX BUG-02: Advisory Lock to prevent race conditions ---
+        // Locks this specific business pair so concurrent acceptances don't bypass credit limit
+        await prisma.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${order.senderId || ''} || '-' || ${order.receiverId || ''}))
+        `;
+
+        // --- FIX BUG-01: Re-validate credit limit at ACCEPTANCE time ---
+        // Catches the case where pricesVisible=false at creation, prices added later via updateOrderPrices
+        const connection = await prisma.connection.findFirst({
+          where: {
+            OR: [
+              { requesterId: order.senderId, receiverId: order.receiverId },
+              { requesterId: order.receiverId, receiverId: order.senderId },
+            ],
+            status: 'ACCEPTED',
+          },
+          include: { account: true },
+        });
+
+        if (connection?.account) {
+          const currentDebit = new Decimal(connection.account.totalDebit as any);
+          const creditLimit = new Decimal(connection.account.creditLimit as any);
+          const orderTotal = new Decimal(order.total as any);
+          const newDebt = currentDebit.plus(orderTotal);
+
+          if (newDebt.greaterThan(creditLimit)) {
+            throw new BadRequestException(
+              `لا يمكن قبول الطلبية: تجاوزت حد سقف المديونية. السقف: ${creditLimit.toFixed(2)}, الرصيد الحالي: ${currentDebit.toFixed(2)}, المطلوب: ${orderTotal.toFixed(2)}`,
+            );
+          }
+        }
+
         const orderUpdated = await prisma.order.update({
           where: { id: orderId },
           data: {
@@ -346,6 +383,20 @@ export class OrdersService {
           dueDate: order.dueDate ?? undefined,
           note: `فاتورة آجل #${order.orderNumber}`,
         });
+
+        const paidAmount = new Decimal((order as any).paidAmount || '0');
+        if (paidAmount.greaterThan(0)) {
+          await this.financeService.recordFinancialMovement(prisma, {
+            senderId: order.receiverId,
+            receiverId: order.senderId,
+            amount: paidAmount.toString(),
+            type: 'PAYMENT',
+            orderId: order.id,
+            currency: order.currency,
+            dueDate: order.dueDate ?? undefined,
+            note: `سداد جزئي للفاتورة الآجلة #${order.orderNumber}`,
+          });
+        }
 
         return orderUpdated;
       });

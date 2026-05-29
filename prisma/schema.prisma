@@ -43,6 +43,8 @@ model User {
   approvedPayments PaymentRequest[] @relation("ApprovedPayments")
   subscriptions    UserSubscription[]
   refreshTokens    RefreshToken[]
+  createdAdjustmentRequests  AdjustmentRequest[] @relation("AdjustmentCreatedBy")
+  reviewedAdjustmentRequests AdjustmentRequest[] @relation("AdjustmentReviewedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -100,6 +102,9 @@ model Business {
   subscriptions    UserSubscription[]
   cloudBackupCredential CloudBackupCredential?
   cloudBackupRecords    CloudBackupRecord[]
+  requestedAdjustments  AdjustmentRequest[] @relation("AdjustmentRequester")
+  receivedAdjustments   AdjustmentRequest[] @relation("AdjustmentReceiver")
+  dueReminderLogs       DueReminderLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -168,6 +173,7 @@ model Order {
   subtotal Decimal @default(0.00) @db.Decimal(15, 2)
   tax      Decimal @default(0.00) @db.Decimal(15, 2)
   discount Decimal @default(0.00) @db.Decimal(15, 2)
+  paidAmount Decimal @default(0.00) @db.Decimal(15, 2)
   total    Decimal @default(0.00) @db.Decimal(15, 2)
 
   notes           String? @db.Text
@@ -360,6 +366,56 @@ model Suggestion {
   createdAt DateTime @default(now())
 
   @@map("suggestions")
+}
+
+model AdjustmentRequest {
+  id                  String   @id @default(uuid())
+  requesterBusinessId String
+  receiverBusinessId  String
+  targetType          String
+  targetId            String
+  requestedAmount     Decimal? @db.Decimal(15, 2)
+  requestedDueDate    DateTime?
+  requestedNote       String?  @db.Text
+  reason              String   @db.Text
+  status              String   @default("PENDING")
+  rejectionReason     String?  @db.Text
+  createdById         String
+  reviewedById        String?
+  reviewedAt          DateTime?
+
+  requesterBusiness Business @relation("AdjustmentRequester", fields: [requesterBusinessId], references: [id])
+  receiverBusiness  Business @relation("AdjustmentReceiver", fields: [receiverBusinessId], references: [id])
+  createdBy         User     @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
+  reviewedBy        User?    @relation("AdjustmentReviewedBy", fields: [reviewedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([requesterBusinessId], name: "adjustment_requests_requester_idx")
+  @@index([receiverBusinessId], name: "adjustment_requests_receiver_idx")
+  @@index([targetType, targetId], name: "adjustment_requests_target_idx")
+  @@map("adjustment_requests")
+}
+
+model DueReminderLog {
+  id                  String   @id @default(uuid())
+  connectionId        String
+  accountId           String
+  recipientBusinessId String
+  reminderDate        DateTime
+  dueDate             DateTime
+  amount              Decimal  @db.Decimal(15, 2)
+  direction           String
+
+  recipientBusiness Business @relation(fields: [recipientBusinessId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([connectionId, recipientBusinessId, reminderDate], name: "due_reminder_once_per_day")
+  @@index([recipientBusinessId], name: "due_reminder_logs_recipient_idx")
+  @@index([dueDate], name: "due_reminder_logs_due_date_idx")
+  @@map("due_reminder_logs")
 }
 
 enum SubscriptionStatus {

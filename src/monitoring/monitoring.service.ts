@@ -31,14 +31,12 @@ export class MonitoringService {
           select: {
             fullName: true,
             userType: true,
-          }
-        }
-      }
+          },
+        },
+      },
     });
 
-    // Notify Admins
     this.eventsGateway.server.emit('admin-suggestion-created', suggestion);
-
     return suggestion;
   }
 
@@ -50,22 +48,5 @@ export class MonitoringService {
         subscriptionExpiry: true,
       },
     });
-  }
-
-  async activateSubscription(businessId: string, code: string) {
-    // Simple verification logic for demo purposes
-    // In production, this would call a payment gateway or a secure license server
-    if (code === 'GOLD-2026-NEQAWA' || code === 'TEST-ACTIVATE') {
-      const expiry = new Date();
-      expiry.setFullYear(expiry.getFullYear() + 1); // 1 year
-      return this.prisma.business.update({
-        where: { id: businessId },
-        data: {
-          subscriptionStatus: 'GOLD',
-          subscriptionExpiry: expiry,
-        },
-      });
-    }
-    throw new Error('رمز التفعيل غير صحيح');
   }
 }

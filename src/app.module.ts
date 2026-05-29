@@ -20,6 +20,8 @@ import { MonitoringModule } from './monitoring/monitoring.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { BusinessesModule } from './businesses/businesses.module';
 import { AuditModule } from './audit/audit.module';
+import { AdjustmentRequestsModule } from './adjustment-requests/adjustment-requests.module';
+import { DueRemindersModule } from './due-reminders/due-reminders.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -50,6 +52,8 @@ import { AppService } from './app.service';
     MonitoringModule,
     SubscriptionsModule,
     BusinessesModule,
+    AdjustmentRequestsModule,
+    DueRemindersModule,
   ],
   controllers: [AppController],
   providers: [

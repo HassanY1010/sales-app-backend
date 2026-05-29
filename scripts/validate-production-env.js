@@ -8,6 +8,7 @@ const required = [
   'FCM_PROJECT_ID',
   'FCM_CLIENT_EMAIL',
   'FCM_PRIVATE_KEY',
+  'BACKUP_TOKEN_ENCRYPTION_KEY',
 ];
 
 const missing = required.filter((key) => !process.env[key] || String(process.env[key]).trim() === '');
@@ -23,6 +24,13 @@ if (process.env.CORS_ORIGINS && process.env.CORS_ORIGINS.includes('*')) {
 
 if (process.env.FCM_PRIVATE_KEY && !process.env.FCM_PRIVATE_KEY.includes('BEGIN PRIVATE KEY')) {
   weak.push('FCM_PRIVATE_KEY must be a real Firebase service-account private key');
+}
+
+if (process.env.BACKUP_TOKEN_ENCRYPTION_KEY) {
+  const decoded = Buffer.from(process.env.BACKUP_TOKEN_ENCRYPTION_KEY, 'base64');
+  if (decoded.length !== 32 && process.env.BACKUP_TOKEN_ENCRYPTION_KEY.length < 32) {
+    weak.push('BACKUP_TOKEN_ENCRYPTION_KEY must be at least 32 characters or 32 base64 bytes');
+  }
 }
 
 if (missing.length || weak.length) {

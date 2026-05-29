@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, ForbiddenException } from '@nestjs/common';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -13,27 +13,59 @@ export class ReportsController {
 
   @Get('debts')
   @Roles('business')
-  async getDebts(@CurrentUser() user: any) {
+  async getDebts(@CurrentUser() user: any, @Query() query: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.reportsService.getDebtsToMe(user.businessId);
+    return this.reportsService.getDebtsToMe(user.businessId, query);
   }
 
   @Get('creditors')
-  async getCreditors(@CurrentUser() user: any) {
+  async getCreditors(@CurrentUser() user: any, @Query() query: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.reportsService.getMyDebts(user.businessId);
+    return this.reportsService.getMyDebts(user.businessId, query);
   }
 
   @Get('summary')
-  async getSummary(@CurrentUser() user: any) {
+  async getSummary(@CurrentUser() user: any, @Query() query: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.reportsService.getSummary(user.businessId);
+    return this.reportsService.getSummary(user.businessId, query);
+  }
+
+  @Get('orders')
+  async getOrdersReport(@CurrentUser() user: any, @Query() query: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.reportsService.getOrdersReport(user.businessId, query);
+  }
+
+  @Get('transactions')
+  async getTransactionsReport(@CurrentUser() user: any, @Query() query: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.reportsService.getTransactionsReport(user.businessId, query);
+  }
+
+  @Get('export')
+  async exportReport(@CurrentUser() user: any, @Query() query: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.reportsService.exportReport(user.businessId, query);
+  }
+
+  @Get('due-accounts')
+  async getDueAccounts(@CurrentUser() user: any, @Query() query: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.reportsService.getDueAccounts(user.businessId, query);
   }
 
   @Get('activity')
@@ -46,10 +78,10 @@ export class ReportsController {
 
   @Get('weekly-sales')
   @Roles('business')
-  async getWeeklySales(@CurrentUser() user: any) {
+  async getWeeklySales(@CurrentUser() user: any, @Query() query: any) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.reportsService.getWeeklySalesData(user.businessId);
+    return this.reportsService.getWeeklySalesData(user.businessId, query);
   }
 }

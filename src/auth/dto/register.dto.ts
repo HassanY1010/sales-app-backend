@@ -4,6 +4,8 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
+  MaxLength,
   MinLength,
   ValidateIf,
 } from 'class-validator';
@@ -14,20 +16,29 @@ export class RegisterDto {
 
   @IsString()
   @MinLength(6)
+  @MaxLength(128)
   password: string;
 
   @IsString()
+  @IsOptional()
+  @MinLength(6)
+  @MaxLength(128)
+  confirmPassword?: string;
+
+  @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   fullName: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(32)
   phoneNumber: string;
 
   @IsString()
-  @IsOptional()
-  @MinLength(4)
-  securityPin?: string;
+  @IsNotEmpty()
+  @Matches(/^\S{4}$/)
+  securityPin: string;
 
   @IsString()
   @IsEnum(['individual', 'business'])
@@ -37,10 +48,12 @@ export class RegisterDto {
   @ValidateIf((o) => o.userType === 'business')
   @IsString()
   @IsNotEmpty()
+  @MaxLength(120)
   businessName?: string;
 
   @ValidateIf((o) => o.userType === 'business')
   @IsString()
   @IsOptional()
+  @MaxLength(80)
   businessType?: string;
 }

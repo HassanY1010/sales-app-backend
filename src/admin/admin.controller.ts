@@ -142,6 +142,29 @@ export class AdminController {
     return this.adminService.getAccountById(id);
   }
 
+  @Get('due-accounts')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  getDueAccounts(@Query() query: PaginationDto & { includeFuture?: string }) {
+    return this.adminService.getDueAccounts(query);
+  }
+
+  // ==================== Adjustment Requests ====================
+  @Get('adjustment-requests')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  getAdjustmentRequests(@Query() query: PaginationDto & { status?: string; targetType?: string }) {
+    return this.adminService.getAdjustmentRequests(query);
+  }
+
+  @Put('adjustment-requests/:id/reject')
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  rejectAdjustmentRequest(
+    @Param('id') id: string,
+    @Body('rejectionReason') rejectionReason: string,
+    @Request() req: any,
+  ) {
+    return this.adminService.rejectAdjustmentRequest(id, rejectionReason, req.user.userId);
+  }
+
   // ==================== Expenses ====================
   @Get('expenses')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')

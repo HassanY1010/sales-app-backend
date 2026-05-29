@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -7,6 +13,7 @@ import { PrismaService } from '../database/prisma.service';
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getMe(userId: string) {
@@ -21,8 +28,8 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const { password: _, ...userWithoutPassword } = user;
-    return userWithoutPassword;
+    const { password: _, securityPin: __, ...userWithoutSecrets } = user;
+    return userWithoutSecrets;
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
@@ -45,50 +52,47 @@ export class UsersService {
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
-    this.logger.log(`Changing password for user: ${userId}`);
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new NotFoundException('المستخدم غير موجود');
+      throw new NotFoundException('User not found');
     }
 
     const isMatch = await bcrypt.compare(dto.oldPassword, user.password);
     if (!isMatch) {
-      throw new UnauthorizedException('كلمة المرور القديمة غير صحيحة');
+      throw new UnauthorizedException('Current password is incorrect');
     }
 
-    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
-    this.logger.log(`Updating password for user ID: ${userId}`);
-    
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
       data: { password: hashedPassword },
     });
 
-    this.logger.log(`Password updated successfully for user ID: ${userId}`);
-    return { message: 'تم تغيير كلمة المرور بنجاح' };
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    return { message: 'Password changed successfully' };
   }
 
   async changeSecurityPin(userId: string, pin: string) {
-    this.logger.log(`Changing security PIN for user: ${userId}`);
-    if (pin.length !== 4) {
-      throw new BadRequestException('يجب أن يتكون رمز الأمان من 4 أرقام');
+    if (!/^[A-Za-z0-9]{4}$/.test(pin)) {
+      throw new BadRequestException('Security PIN must be exactly 4 letters or digits');
     }
 
-    const hashedPin = await bcrypt.hash(pin, 10);
+    const hashedPin = await bcrypt.hash(pin, 12);
     await this.prisma.user.update({
       where: { id: userId },
       data: { securityPin: hashedPin },
     });
 
-    return { message: 'تم تغيير رمز الأمان بنجاح' };
+    return { message: 'Security PIN changed successfully' };
   }
 
   async updatePushToken(userId: string, pushToken: string) {
     if (!pushToken || pushToken.trim().length < 20) {
-      throw new BadRequestException('رمز الإشعارات غير صالح');
+      throw new BadRequestException('Invalid push notification token');
     }
 
     await this.prisma.user.update({
@@ -96,6 +100,28 @@ export class UsersService {
       data: { pushToken: pushToken.trim() },
     });
 
-    return { message: 'تم تحديث رمز الإشعارات بنجاح' };
+    return { message: 'Push notification token updated successfully' };
+  }
+
+  async updateBusinessLogo(userId: string, logoUrl: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { business: { select: { id: true } } },
+    });
+
+    if (!user?.business?.id) {
+      throw new NotFoundException('Business profile not found');
+    }
+
+    const business = await this.prisma.business.update({
+      where: { id: user.business.id },
+      data: { logoUrl },
+      select: {
+        id: true,
+        logoUrl: true,
+      },
+    });
+
+    return { url: business.logoUrl };
   }
 }

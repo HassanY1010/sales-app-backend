@@ -4,16 +4,17 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { google } from 'googleapis';
-import { createHash } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { Readable } from 'stream';
 import { PrismaService } from '../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
 
 @Injectable()
-export class BackupService {
+export class BackupService implements OnModuleInit {
   private readonly logger = new Logger(BackupService.name);
 
   constructor(
@@ -21,6 +22,20 @@ export class BackupService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
   ) {}
+
+  onModuleInit() {
+    // FIX BACKUP-01: Validate required encryption key at startup to prevent silent failures
+    const encryptionKey = this.config.get<string>('BACKUP_TOKEN_ENCRYPTION_KEY');
+    if (!encryptionKey || encryptionKey.length < 32) {
+      this.logger.warn(
+        '⚠️  BACKUP_TOKEN_ENCRYPTION_KEY is missing or too short (must be ≥32 chars). ' +
+        'Google Drive backup/restore will fail. Set this env variable before using backup features.',
+      );
+    } else {
+      this.logger.log('✅ BackupService initialized with valid encryption key.');
+    }
+  }
+
 
   async exportData(businessId: string) {
     this.logger.log(`Exporting data for business: ${businessId}`);
@@ -89,6 +104,8 @@ export class BackupService {
       throw new BadRequestException('ملف النسخ الاحتياطي لا يخص هذا الحساب');
     }
 
+    this.validateBackupPayload(backupData);
+
     return this.prisma.$transaction(async (tx) => {
       const data = backupData.data || {};
       const stats = {
@@ -111,8 +128,6 @@ export class BackupService {
             'email',
             'address',
             'logoUrl',
-            'subscriptionStatus',
-            'subscriptionExpiry',
           ]),
         });
         stats.business = 1;
@@ -147,7 +162,15 @@ export class BackupService {
         stats.connections++;
       }
 
+      const validConnectionIds = new Set(
+        (await tx.connection.findMany({
+          where: { OR: [{ requesterId: businessId }, { receiverId: businessId }] },
+          select: { id: true },
+        })).map((connection) => connection.id),
+      );
+
       for (const account of data.accounts || []) {
+        if (!validConnectionIds.has(account.connectionId)) continue;
         await tx.account.upsert({
           where: { connectionId: account.connectionId },
           create: this.pick(account, [
@@ -356,13 +379,13 @@ export class BackupService {
       where: { businessId },
       create: {
         businessId,
-        refreshToken: tokens.refresh_token,
+        refreshToken: this.encryptSecret(tokens.refresh_token),
         email: profile.data.email,
         scope: tokens.scope,
         expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined,
       },
       update: {
-        refreshToken: tokens.refresh_token,
+        refreshToken: this.encryptSecret(tokens.refresh_token),
         email: profile.data.email,
         scope: tokens.scope,
         expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined,
@@ -479,7 +502,7 @@ export class BackupService {
     }
 
     const oauth2 = this.createOAuthClient();
-    oauth2.setCredentials({ refresh_token: credential.refreshToken });
+    oauth2.setCredentials({ refresh_token: this.decryptSecret(credential.refreshToken) });
     return google.drive({ version: 'v3', auth: oauth2 });
   }
 
@@ -505,5 +528,77 @@ export class BackupService {
       }
       return acc;
     }, {});
+  }
+
+  private validateBackupPayload(backupData: any) {
+    if (backupData.version !== 2) {
+      throw new BadRequestException('Unsupported backup version');
+    }
+
+    if (!backupData.data || typeof backupData.data !== 'object') {
+      throw new BadRequestException('Invalid backup payload');
+    }
+
+    for (const key of ['connections', 'accounts', 'orders', 'transactions', 'notifications']) {
+      if (backupData.data[key] !== undefined && !Array.isArray(backupData.data[key])) {
+        throw new BadRequestException(`Invalid backup collection: ${key}`);
+      }
+    }
+  }
+
+  private encryptSecret(value: string) {
+    const key = this.getBackupEncryptionKey();
+    if (!key) return value;
+
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    return [
+      'enc:v1',
+      iv.toString('base64url'),
+      tag.toString('base64url'),
+      encrypted.toString('base64url'),
+    ].join(':');
+  }
+
+  private decryptSecret(value: string) {
+    if (!value.startsWith('enc:v1:')) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new InternalServerErrorException('Stored Google Drive credential is not encrypted');
+      }
+      return value;
+    }
+
+    const key = this.getBackupEncryptionKey();
+    if (!key) {
+      throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY is required to decrypt Google Drive credentials');
+    }
+
+    const [, , ivPart, tagPart, encryptedPart] = value.split(':');
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivPart, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedPart, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8');
+  }
+
+  private getBackupEncryptionKey() {
+    const configured = this.config.get<string>('BACKUP_TOKEN_ENCRYPTION_KEY');
+    if (!configured) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY is required in production');
+      }
+      return null;
+    }
+
+    const decoded = Buffer.from(configured, 'base64');
+    if (decoded.length === 32) return decoded;
+    if (configured.length >= 32) return createHash('sha256').update(configured).digest();
+
+    throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY must be at least 32 characters or 32 base64 bytes');
   }
 }

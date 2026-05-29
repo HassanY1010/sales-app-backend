@@ -93,8 +93,8 @@ export class AdminService {
     const where: any = {};
     if (search) {
       where.OR = [
-        { fullName: { contains: search } },
-        { email: { contains: search } },
+        { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
         { phoneNumber: { contains: search } },
       ];
     }
@@ -229,8 +229,8 @@ export class AdminService {
     const where: any = {};
     if (search) {
       where.OR = [
-        { name: { contains: search } },
-        { email: { contains: search } },
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
         { phoneNumber: { contains: search } },
       ];
     }
@@ -358,9 +358,9 @@ export class AdminService {
     if (maxAmount) where.total = { ...where.total, lte: maxAmount };
     if (search) {
       where.OR = [
-        { orderNumber: { contains: search } },
-        { sender: { name: { contains: search } } },
-        { receiver: { name: { contains: search } } },
+        { orderNumber: { contains: search, mode: 'insensitive' } },
+        { sender: { name: { contains: search, mode: 'insensitive' } } },
+        { receiver: { name: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -419,9 +419,9 @@ export class AdminService {
     if (maxAmount) where.amount = { ...where.amount, lte: maxAmount };
     if (search) {
       where.OR = [
-        { note: { contains: search } },
-        { sender: { name: { contains: search } } },
-        { receiver: { name: { contains: search } } },
+        { note: { contains: search, mode: 'insensitive' } },
+        { sender: { name: { contains: search, mode: 'insensitive' } } },
+        { receiver: { name: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -529,6 +529,114 @@ export class AdminService {
     }
 
     return account;
+  }
+
+  async getDueAccounts(query: PaginationDto & { includeFuture?: string }) {
+    const { page = 1, limit = 10, includeFuture } = query;
+    const skip = (page - 1) * limit;
+    const now = new Date();
+
+    const where: any = {
+      dueDate: includeFuture === 'true' ? { not: null } : { lte: now },
+      NOT: { balance: 0 },
+    };
+
+    const [accounts, total] = await Promise.all([
+      this.prisma.account.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { dueDate: 'asc' },
+        include: {
+          connection: {
+            include: {
+              requester: { select: { id: true, name: true, user: { select: { id: true, fullName: true } } } },
+              receiver: { select: { id: true, name: true, user: { select: { id: true, fullName: true } } } },
+            },
+          },
+        },
+      }),
+      this.prisma.account.count({ where }),
+    ]);
+
+    return {
+      data: accounts.map((account) => {
+        const balance = new Decimal(account.balance as any);
+        return {
+          ...account,
+          amount: balance.abs().toString(),
+          debtor: balance.greaterThan(0)
+            ? account.connection.receiver
+            : account.connection.requester,
+          creditor: balance.greaterThan(0)
+            ? account.connection.requester
+            : account.connection.receiver,
+          isOverdue: account.dueDate ? account.dueDate <= now : false,
+        };
+      }),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async getAdjustmentRequests(query: PaginationDto & { status?: string; targetType?: string }) {
+    const { page = 1, limit = 10, status, targetType } = query;
+    const skip = (page - 1) * limit;
+    const where: any = {};
+    if (status) where.status = status;
+    if (targetType) where.targetType = targetType;
+
+    const [requests, total] = await Promise.all([
+      this.prisma.adjustmentRequest.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          requesterBusiness: { select: { id: true, name: true } },
+          receiverBusiness: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, fullName: true, email: true } },
+          reviewedBy: { select: { id: true, fullName: true, email: true } },
+        },
+      }),
+      this.prisma.adjustmentRequest.count({ where }),
+    ]);
+
+    return {
+      data: requests,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async rejectAdjustmentRequest(id: string, rejectionReason: string, adminId: string) {
+    if (!rejectionReason || rejectionReason.trim().length < 5) {
+      throw new BadRequestException('Rejection reason is required');
+    }
+
+    const request = await this.prisma.adjustmentRequest.findUnique({ where: { id } });
+    if (!request) {
+      throw new NotFoundException('Adjustment request not found');
+    }
+    if (request.status !== 'PENDING') {
+      throw new BadRequestException(`Adjustment request is already ${request.status}`);
+    }
+
+    const rejected = await this.prisma.adjustmentRequest.update({
+      where: { id },
+      data: {
+        status: 'REJECTED',
+        rejectionReason: rejectionReason.trim(),
+        reviewedById: adminId,
+        reviewedAt: new Date(),
+      },
+    });
+
+    await this.logAdminAction(adminId, 'REJECT_ADJUSTMENT_REQUEST', 'ADJUSTMENT_REQUEST', id, {
+      targetType: request.targetType,
+      targetId: request.targetId,
+      rejectionReason: rejectionReason.trim(),
+    });
+
+    return rejected;
   }
 
   // ==================== Expenses ====================
@@ -676,6 +784,17 @@ export class AdminService {
   }
 
   async updateSuggestionStatus(suggestionId: string, status: string) {
+    // FIX BUG-03: Validate status against allowed values before persisting
+    const VALID_STATUSES = ['OPEN', 'REVIEWED', 'CLOSED'];
+    if (!VALID_STATUSES.includes(status)) {
+      throw new BadRequestException(`حالة غير صالحة. القيم المسموح بها: ${VALID_STATUSES.join(', ')}`);
+    }
+
+    const suggestion = await this.prisma.suggestion.findUnique({ where: { id: suggestionId } });
+    if (!suggestion) {
+      throw new NotFoundException('الاقتراح غير موجود');
+    }
+
     return this.prisma.suggestion.update({
       where: { id: suggestionId },
       data: { status },
@@ -720,16 +839,27 @@ export class AdminService {
       if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
-    const [transactions, orders, accounts] = await Promise.all([
-      this.prisma.transaction.findMany({ where }),
-      this.prisma.order.findMany({ where: { ...where } }),
-      this.prisma.account.findMany(),
+    // FIX BUG-04: Use aggregate instead of findMany to avoid loading all records into memory
+    const [transactionSum, orderSum, accountSums] = await Promise.all([
+      this.prisma.transaction.aggregate({
+        where,
+        _sum: { amount: true },
+        _count: { id: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...where },
+        _sum: { total: true },
+        _count: { id: true },
+      }),
+      this.prisma.account.aggregate({
+        _sum: { totalDebit: true, totalCredit: true },
+      }),
     ]);
 
-    const totalRevenue = transactions.reduce((sum, t) => sum.plus(t.amount), new Decimal(0));
-    const totalOrderValue = orders.reduce((sum, o) => sum.plus(o.total), new Decimal(0));
-    const totalReceivable = accounts.reduce((sum, a) => sum.plus(a.totalDebit), new Decimal(0));
-    const totalPayable = accounts.reduce((sum, a) => sum.plus(a.totalCredit), new Decimal(0));
+    const totalRevenue = new Decimal(transactionSum._sum.amount?.toString() || '0');
+    const totalOrderValue = new Decimal(orderSum._sum.total?.toString() || '0');
+    const totalReceivable = new Decimal(accountSums._sum.totalDebit?.toString() || '0');
+    const totalPayable = new Decimal(accountSums._sum.totalCredit?.toString() || '0');
 
     return {
       totalRevenue: totalRevenue.toString(),
@@ -737,6 +867,8 @@ export class AdminService {
       totalReceivable: totalReceivable.toString(),
       totalPayable: totalPayable.toString(),
       netBalance: totalReceivable.minus(totalPayable).toString(),
+      transactionCount: transactionSum._count.id,
+      orderCount: orderSum._count.id,
     };
   }
 

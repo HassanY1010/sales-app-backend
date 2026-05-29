@@ -1,5 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
+import * as express from 'express';
+import type { NextFunction, Request, Response } from 'express';
+import { join } from 'path';
 import { AppModule } from './app.module';
 import { StandardResponseInterceptor } from './core/interceptors/standard-response.interceptor';
 import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
@@ -53,6 +56,23 @@ async function bootstrap() {
 
   // 2. Security Headers
   app.use(helmet());
+  app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const unsafeMethod = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+    const hasAuthCookie = typeof req.headers.cookie === 'string' && req.headers.cookie.includes('access_token=');
+    const csrfHeader = req.headers['x-csrf-protection'];
+
+    if (unsafeMethod && hasAuthCookie && csrfHeader !== '1') {
+      return res.status(403).json({
+        success: false,
+        message: 'CSRF protection header is required',
+        error: 'Forbidden',
+        data: null,
+      });
+    }
+
+    return next();
+  });
 
   // Global Validation Pipe
   app.useGlobalPipes(
@@ -83,7 +103,7 @@ async function bootstrap() {
     },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    allowedHeaders: 'Content-Type,Accept,Authorization,x-idempotency-key',
+    allowedHeaders: 'Content-Type,Accept,Authorization,x-idempotency-key,x-csrf-protection',
   });
 
   const port = process.env.PORT || 3000;

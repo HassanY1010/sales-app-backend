@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  BadRequestException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -30,7 +31,15 @@ export class AuthService {
     return digits.startsWith('0') ? digits.substring(1) : digits;
   }
 
-  async register(dto: RegisterDto, ipAddress?: string, userAgent?: string | string[]) {
+  async register(
+    dto: RegisterDto,
+    ipAddress?: string,
+    userAgent?: string | string[],
+  ) {
+    if (dto.confirmPassword && dto.confirmPassword !== dto.password) {
+      throw new BadRequestException('Password confirmation does not match');
+    }
+
     const normalizedEmail = dto.email.trim().toLowerCase();
     const normalizedPhone = this.normalizeIdentifier(dto.phoneNumber);
 
@@ -48,7 +57,9 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 12);
-    const hashedPin = dto.securityPin ? await bcrypt.hash(dto.securityPin, 12) : undefined;
+    const hashedPin = dto.securityPin
+      ? await bcrypt.hash(dto.securityPin, 12)
+      : undefined;
 
     const user = await this.prisma.user.create({
       data: {
@@ -60,8 +71,10 @@ export class AuthService {
         userType: dto.userType,
         business: {
           create: {
-            name: dto.userType === 'business' ? dto.businessName! : dto.fullName,
-            businessType: dto.userType === 'business' ? dto.businessType : 'Individual',
+            name:
+              dto.userType === 'business' ? dto.businessName! : dto.fullName,
+            businessType:
+              dto.userType === 'business' ? dto.businessType : 'Individual',
             phoneNumber: normalizedPhone,
             email: normalizedEmail,
           },
@@ -79,15 +92,25 @@ export class AuthService {
     return { ...tokens, user: safeUser };
   }
 
-  async login(dto: LoginDto, ipAddress?: string, userAgent?: string | string[]) {
+  async login(
+    dto: LoginDto,
+    ipAddress?: string,
+    userAgent?: string | string[],
+  ) {
     const identifier = this.normalizeIdentifier(dto.email);
     const user = await this.prisma.user.findFirst({
       where: { OR: [{ email: identifier }, { phoneNumber: identifier }] },
       include: { business: true },
     });
 
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException('بيانات الدخول غير صحيحة');
+    if (!user) {
+      throw new UnauthorizedException('رقم الهاتف أو كلمة المرور غير صحيحة.');
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException(
+        'تم تعطيل هذا الحساب من قبل الإدارة. يرجى التواصل مع الدعم.',
+      );
     }
 
     const mappedUserType =
@@ -96,7 +119,10 @@ export class AuthService {
         : dto.userType === 'consumer'
           ? 'individual'
           : dto.userType;
-    const isAdmin = user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.role === 'SUPPORT';
+    const isAdmin =
+      user.role === 'ADMIN' ||
+      user.role === 'SUPER_ADMIN' ||
+      user.role === 'SUPPORT';
 
     if (!isAdmin && dto.userType && user.userType !== mappedUserType) {
       throw new UnauthorizedException('هذا الحساب مسجل كنوع آخر');
@@ -104,7 +130,7 @@ export class AuthService {
 
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
     if (!isPasswordValid) {
-      throw new UnauthorizedException('بيانات الدخول غير صحيحة');
+      throw new UnauthorizedException('رقم الهاتف أو كلمة المرور غير صحيحة.');
     }
 
     await this.prisma.user.update({
@@ -121,15 +147,25 @@ export class AuthService {
     return { ...tokens, user: safeUser };
   }
 
-  async refresh(refreshToken: string, ipAddress?: string, userAgent?: string | string[]) {
-    if (!refreshToken) throw new UnauthorizedException('Refresh token is required');
+  async refresh(
+    refreshToken: string,
+    ipAddress?: string,
+    userAgent?: string | string[],
+  ) {
+    if (!refreshToken)
+      throw new UnauthorizedException('Refresh token is required');
 
     const stored = await this.prisma.refreshToken.findUnique({
       where: { tokenHash: this.hashToken(refreshToken) },
       include: { user: { include: { business: true } } },
     });
 
-    if (!stored || stored.revokedAt || stored.expiresAt <= new Date() || !stored.user.isActive) {
+    if (
+      !stored ||
+      stored.revokedAt ||
+      stored.expiresAt <= new Date() ||
+      !stored.user.isActive
+    ) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -159,24 +195,30 @@ export class AuthService {
 
   async verifyResetPin(identifier: string, pin: string) {
     const user = await this.findUserByIdentifier(identifier);
-    if (!user?.securityPin) {
-      throw new UnauthorizedException('البيانات المدخلة غير صحيحة');
+    if (!user) {
+      throw new UnauthorizedException('user_not_found');
+    }
+    if (!user.securityPin) {
+      throw new UnauthorizedException('security_pin_invalid');
     }
     const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
-      throw new UnauthorizedException('البيانات المدخلة غير صحيحة');
+      throw new UnauthorizedException('security_pin_invalid');
     }
     return { success: true, message: 'تم التحقق بنجاح' };
   }
 
   async resetPassword(identifier: string, newPassword: string, pin: string) {
     const user = await this.findUserByIdentifier(identifier);
-    if (!user?.securityPin) {
-      throw new UnauthorizedException('البيانات المدخلة غير صحيحة');
+    if (!user) {
+      throw new UnauthorizedException('user_not_found');
+    }
+    if (!user.securityPin) {
+      throw new UnauthorizedException('security_pin_invalid');
     }
     const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
-      throw new UnauthorizedException('البيانات المدخلة غير صحيحة');
+      throw new UnauthorizedException('security_pin_invalid');
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -205,7 +247,7 @@ export class AuthService {
   async forgotPassword(identifier: string) {
     const user = await this.findUserByIdentifier(identifier);
     if (!user) {
-      throw new UnauthorizedException('البيانات المدخلة غير صحيحة');
+      throw new UnauthorizedException('user_not_found');
     }
     return {
       success: true,
@@ -217,7 +259,10 @@ export class AuthService {
     const normalizedIdentifier = this.normalizeIdentifier(identifier);
     return this.prisma.user.findFirst({
       where: {
-        OR: [{ email: normalizedIdentifier }, { phoneNumber: normalizedIdentifier }],
+        OR: [
+          { email: normalizedIdentifier },
+          { phoneNumber: normalizedIdentifier },
+        ],
       },
     });
   }
@@ -232,7 +277,9 @@ export class AuthService {
       tokenType: 'access',
     });
     const refreshToken = randomBytes(48).toString('base64url');
-    const refreshDays = Number(this.config.get<string>('JWT_REFRESH_EXPIRES_DAYS') || '30');
+    const refreshDays = Number(
+      this.config.get<string>('JWT_REFRESH_EXPIRES_DAYS') || '30',
+    );
     const expiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
 
     await this.prisma.refreshToken.create({

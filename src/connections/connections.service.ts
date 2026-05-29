@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CreateConnectionDto } from './dto/create-connection.dto';
+import { ManualAddConnectionDto } from './dto/manual-add-connection.dto';
 import { Decimal } from 'decimal.js';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import * as bcrypt from 'bcrypt';
@@ -124,6 +125,7 @@ export class ConnectionsService {
     options?: {
       creditLimit?: number;
       billingCycle?: string;
+      dueDate?: string;
       openingBalance?: number;
       showPrices?: boolean;
     },
@@ -146,6 +148,7 @@ export class ConnectionsService {
 
     const creditLimit = options?.creditLimit ?? 100000;
     const billingCycle = options?.billingCycle ?? null;
+    const dueDate = options?.dueDate ? new Date(options.dueDate) : null;
     const openingBalance = options?.openingBalance ?? 0;
     const showPrices = options?.showPrices ?? false;
 
@@ -165,6 +168,7 @@ export class ConnectionsService {
                 update: {
                   creditLimit,
                   billingCycle,
+                  dueDate,
                   ...(openingBalance !== 0 && {
                     balance: openingBalance,
                     totalCredit: openingBalance > 0 ? openingBalance : 0,
@@ -179,6 +183,7 @@ export class ConnectionsService {
                   totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
                   creditLimit,
                   billingCycle,
+                  dueDate,
                 },
               },
           showPrices,
@@ -305,8 +310,16 @@ export class ConnectionsService {
       this.prisma.connection.findMany({
         where,
         include: {
-          requester: true,
-          receiver: true,
+          requester: {
+            include: {
+              user: { select: { id: true, fullName: true, userType: true, isActive: true } },
+            },
+          },
+          receiver: {
+            include: {
+              user: { select: { id: true, fullName: true, userType: true, isActive: true } },
+            },
+          },
           account: true,
         },
         orderBy: { createdAt: 'desc' },
@@ -401,7 +414,7 @@ export class ConnectionsService {
       data: { showPrices: show },
     });
   }
-  async manualAddConnection(myBusinessId: string, dto: any) {
+  async manualAddConnection(myBusinessId: string, dto: ManualAddConnectionDto) {
     const {
       phoneNumber,
       name,
@@ -410,6 +423,7 @@ export class ConnectionsService {
       connectionType = 'CUSTOMER',
       creditLimit,
       billingCycle,
+      dueDate,
       openingBalance,
       showPrices,
     } = dto;
@@ -473,6 +487,7 @@ export class ConnectionsService {
               update: {
                 ...(creditLimit !== undefined && { creditLimit }),
                 ...(billingCycle !== undefined && { billingCycle }),
+                ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
               },
             },
           },
@@ -498,9 +513,60 @@ export class ConnectionsService {
             totalDebit: initialBalance < 0 ? Math.abs(initialBalance) : 0,
             creditLimit: accountCreditLimit,
             billingCycle,
+            dueDate: dueDate ? new Date(dueDate) : undefined,
           },
         },
       },
     });
+  }
+
+  async updateAccountTerms(
+    businessId: string,
+    connectionId: string,
+    terms: { creditLimit?: number; billingCycle?: string; dueDate?: string | null },
+  ) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id: connectionId },
+      include: { account: true },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('Connection not found');
+    }
+
+    if (connection.requesterId !== businessId && connection.receiverId !== businessId) {
+      throw new ForbiddenException('You do not have access to this connection');
+    }
+
+    if (connection.status !== 'ACCEPTED' || !connection.account) {
+      throw new BadRequestException('Accepted connection with account is required');
+    }
+
+    if (terms.creditLimit !== undefined && terms.creditLimit < 0) {
+      throw new BadRequestException('Credit limit must be zero or greater');
+    }
+
+    const updated = await this.prisma.account.update({
+      where: { id: connection.account.id },
+      data: {
+        ...(terms.creditLimit !== undefined && { creditLimit: terms.creditLimit }),
+        ...(terms.billingCycle !== undefined && { billingCycle: terms.billingCycle }),
+        ...(terms.dueDate !== undefined && {
+          dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
+        }),
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'UPDATE',
+        resource: 'ACCOUNT_TERMS',
+        resourceId: updated.id,
+        businessId,
+        details: terms,
+      },
+    });
+
+    return updated;
   }
 }

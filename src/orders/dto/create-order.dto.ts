@@ -38,6 +38,10 @@ export class CreateOrderDto {
   @IsOptional()
   isCash?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  pricesVisible?: boolean;
+
   @IsNumberString()
   @IsOptional()
   tax?: string;
@@ -45,6 +49,10 @@ export class CreateOrderDto {
   @IsNumberString()
   @IsOptional()
   discount?: string;
+
+  @IsNumberString()
+  @IsOptional()
+  paidAmount?: string;
 
   @IsString()
   @IsOptional()

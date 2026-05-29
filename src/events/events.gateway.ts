@@ -38,7 +38,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   async handleConnection(client: Socket) {
     try {
-      const token = client.handshake.auth.token || client.handshake.headers['authorization']?.split(' ')[1];
+      const token = this.extractToken(client);
       if (!token) {
         client.disconnect();
         return;
@@ -69,6 +69,31 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (e) {
       client.disconnect();
     }
+  }
+
+  private extractToken(client: Socket) {
+    const authToken =
+      typeof client.handshake.auth?.token === 'string' ? client.handshake.auth.token : undefined;
+    const bearerToken =
+      typeof client.handshake.headers.authorization === 'string'
+        ? client.handshake.headers.authorization.split(' ')[1]
+        : undefined;
+    const cookieToken = this.getCookie(client, 'access_token');
+
+    return authToken || bearerToken || cookieToken || '';
+  }
+
+  private getCookie(client: Socket, name: string) {
+    const cookieHeader = client.handshake.headers.cookie;
+    if (!cookieHeader || typeof cookieHeader !== 'string') return undefined;
+
+    return cookieHeader
+      .split(';')
+      .map((cookie) => cookie.trim())
+      .find((cookie) => cookie.startsWith(`${name}=`))
+      ?.split('=')
+      .slice(1)
+      .join('=');
   }
 
   handleDisconnect(client: Socket) {

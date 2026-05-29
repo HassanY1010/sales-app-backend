@@ -7,6 +7,7 @@ import { PrismaService } from '../database/prisma.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import Decimal from 'decimal.js';
 
 @Injectable()
 export class TransactionsService {
@@ -16,13 +17,18 @@ export class TransactionsService {
   ) {}
 
   async createTransaction(senderId: string, dto: CreateTransactionDto) {
+    const recordsReceivedPayment =
+      dto.transactionType === 'PAYMENT' && dto.paymentDirection === 'RECEIVED';
+    const actualSenderId = recordsReceivedPayment ? dto.receiverId : senderId;
+    const actualReceiverId = recordsReceivedPayment ? senderId : dto.receiverId;
+
     // Perform atomic transaction wrapping the movement
     return this.prisma.$transaction(async (tx) => {
       const { transaction } = await this.financeService.recordFinancialMovement(
         tx,
         {
-          senderId,
-          receiverId: dto.receiverId,
+          senderId: actualSenderId,
+          receiverId: actualReceiverId,
           amount: dto.amount,
           type: dto.transactionType as any,
           orderId: dto.orderId,
@@ -76,6 +82,41 @@ export class TransactionsService {
         lastPage: Math.ceil(total / limit),
         limit,
       },
+    };
+  }
+
+  async getTransactionsSummary(businessId: string) {
+    const transactions = await this.prisma.transaction.findMany({
+      where: {
+        OR: [{ senderId: businessId }, { receiverId: businessId }],
+      },
+      select: {
+        senderId: true,
+        receiverId: true,
+        transactionType: true,
+        amount: true,
+      },
+    });
+
+    let sent = new Decimal(0);
+    let received = new Decimal(0);
+    let payments = new Decimal(0);
+    let sales = new Decimal(0);
+
+    for (const transaction of transactions) {
+      const amount = new Decimal(transaction.amount as any);
+      if (transaction.senderId === businessId) sent = sent.plus(amount);
+      if (transaction.receiverId === businessId) received = received.plus(amount);
+      if (transaction.transactionType === 'PAYMENT') payments = payments.plus(amount);
+      if (['SALE', 'PURCHASE'].includes(transaction.transactionType)) sales = sales.plus(amount);
+    }
+
+    return {
+      count: transactions.length,
+      sent: sent.toString(),
+      received: received.toString(),
+      payments: payments.toString(),
+      sales: sales.toString(),
     };
   }
 }
