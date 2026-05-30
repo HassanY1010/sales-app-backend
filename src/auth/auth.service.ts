@@ -56,10 +56,12 @@ export class AuthService {
       throw new ConflictException('رقم الهاتف مستخدم مسبقا');
     }
 
-    const hashedPassword = await bcrypt.hash(dto.password, 12);
-    const hashedPin = dto.securityPin
-      ? await bcrypt.hash(dto.securityPin, 12)
-      : undefined;
+    const [hashedPassword, hashedPin] = await Promise.all([
+      bcrypt.hash(dto.password, 10),
+      dto.securityPin
+        ? bcrypt.hash(dto.securityPin, 10)
+        : Promise.resolve(undefined),
+    ]);
 
     const user = await this.prisma.user.create({
       data: {
@@ -224,7 +226,7 @@ export class AuthService {
     const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
       data: {
-        password: await bcrypt.hash(newPassword, 12),
+        password: await bcrypt.hash(newPassword, 10),
         lastLoginAt: new Date(),
       },
       include: { business: true },

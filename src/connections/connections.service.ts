@@ -438,7 +438,7 @@ export class ConnectionsService {
       });
 
       if (!targetUser) {
-        const shadowPassword = await bcrypt.hash(randomBytes(32).toString('hex'), 12);
+        const shadowPassword = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
         targetUser = await this.prisma.user.create({
           data: {
             phoneNumber: phoneNumber,

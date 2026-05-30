@@ -62,7 +62,7 @@ export class UsersService {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
-    const hashedPassword = await bcrypt.hash(dto.newPassword, 12);
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
     await this.prisma.user.update({
       where: { id: userId },
       data: { password: hashedPassword },
@@ -81,7 +81,7 @@ export class UsersService {
       throw new BadRequestException('Security PIN must be exactly 4 letters or digits');
     }
 
-    const hashedPin = await bcrypt.hash(pin, 12);
+    const hashedPin = await bcrypt.hash(pin, 10);
     await this.prisma.user.update({
       where: { id: userId },
       data: { securityPin: hashedPin },

@@ -203,7 +203,7 @@ export class AdminService {
     }
 
     const temporaryPassword = this.generateTemporaryPassword();
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 12);
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
 
     await this.prisma.user.update({
       where: { id: userId },
