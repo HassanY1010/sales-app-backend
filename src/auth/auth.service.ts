@@ -63,6 +63,19 @@ export class AuthService {
         : Promise.resolve(undefined),
     ]);
 
+    let referredByAgentId: string | undefined = undefined;
+    if (dto.referredByCode) {
+      const agent = await this.prisma.agent.findFirst({
+        where: {
+          referralCode: dto.referredByCode.toUpperCase().trim(),
+          status: 'ACTIVE',
+        },
+      });
+      if (agent) {
+        referredByAgentId = agent.id;
+      }
+    }
+
     const user = await this.prisma.user.create({
       data: {
         email: normalizedEmail,
@@ -71,6 +84,8 @@ export class AuthService {
         phoneNumber: normalizedPhone,
         securityPin: hashedPin,
         userType: dto.userType,
+        referredByAgentId,
+        referredAt: referredByAgentId ? new Date() : undefined,
         business: {
           create: {
             name:

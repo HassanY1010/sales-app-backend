@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from '@nes
 import { PrismaService } from '../database/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CommissionsService } from '../commissions/commissions.service';
 
 @Injectable()
 export class SubscriptionsService {
@@ -11,6 +12,7 @@ export class SubscriptionsService {
     private readonly prisma: PrismaService,
     private readonly eventsGateway: EventsGateway,
     private readonly notificationsService: NotificationsService,
+    private readonly commissionsService: CommissionsService,
   ) {}
 
   async createPaymentRequest(userId: string, dto: { wallet: string; amount: number; notes?: string }) {
@@ -148,6 +150,17 @@ export class SubscriptionsService {
           },
         },
       });
+
+      // ===== Commission Engine Integration =====
+      // Runs inside the same transaction — atomic & safe.
+      // Silently skips if user was not referred by an agent.
+      await this.commissionsService.processSubscriptionCommission(
+        tx,
+        requestId,
+        request.businessId ?? requestId, // fallback if no businessId
+        request.userId,
+        Number(request.amount),
+      );
     });
 
     await this.notificationsService.notifyUser(

@@ -56,4 +56,8 @@ export class RegisterDto {
   @IsOptional()
   @MaxLength(80)
   businessType?: string;
+
+  @IsString()
+  @IsOptional()
+  referredByCode?: string;
 }

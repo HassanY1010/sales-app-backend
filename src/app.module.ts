@@ -22,6 +22,10 @@ import { BusinessesModule } from './businesses/businesses.module';
 import { AuditModule } from './audit/audit.module';
 import { AdjustmentRequestsModule } from './adjustment-requests/adjustment-requests.module';
 import { DueRemindersModule } from './due-reminders/due-reminders.module';
+import { RegionsModule } from './regions/regions.module';
+import { AgentsModule } from './agents/agents.module';
+import { CommissionsModule } from './commissions/commissions.module';
+import { PayoutsModule } from './payouts/payouts.module';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -54,6 +58,10 @@ import { AppService } from './app.service';
     BusinessesModule,
     AdjustmentRequestsModule,
     DueRemindersModule,
+    RegionsModule,
+    AgentsModule,
+    CommissionsModule,
+    PayoutsModule,
   ],
   controllers: [AppController],
   providers: [

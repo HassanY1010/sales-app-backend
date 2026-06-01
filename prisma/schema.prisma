@@ -46,6 +46,12 @@ model User {
   createdAdjustmentRequests  AdjustmentRequest[] @relation("AdjustmentCreatedBy")
   reviewedAdjustmentRequests AdjustmentRequest[] @relation("AdjustmentReviewedBy")
 
+  referredByAgentId String?
+  referredByAgent   Agent?    @relation("ReferredUsers", fields: [referredByAgentId], references: [id], onDelete: SetNull)
+  referredAt        DateTime?
+  agentProfile      Agent?    @relation("UserToAgent")
+  commissions       Commission[] @relation("CustomerCommissions")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -446,6 +452,8 @@ model PaymentRequest {
   approvedById String?
   approvedBy   User?                 @relation("ApprovedPayments", fields: [approvedById], references: [id])
   
+  commissions Commission[]
+
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
 
@@ -482,8 +490,110 @@ model UserSubscription {
   business        Business? @relation(fields: [businessId], references: [id])
   plan            SubscriptionPlan @relation(fields: [planId], references: [id])
   
+  commissions     Commission[]
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@map("user_subscriptions")
+}
+
+model Region {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  agents    Agent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("regions")
+}
+
+enum CommissionType {
+  PERCENTAGE
+  FIXED
+}
+
+enum AgentStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+model Agent {
+  id             String         @id @default(uuid())
+  userId         String         @unique
+  referralCode   String         @unique
+  regionId       String?
+  commissionType CommissionType @default(PERCENTAGE)
+  commissionValue Decimal        @default(10.00) @db.Decimal(15, 2)
+  status         AgentStatus    @default(ACTIVE)
+  
+  user           User           @relation("UserToAgent", fields: [userId], references: [id], onDelete: Cascade)
+  region         Region?        @relation(fields: [regionId], references: [id], onDelete: SetNull)
+  referredUsers  User[]         @relation("ReferredUsers")
+  commissions    Commission[]
+  payouts        CommissionPayout[]
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@map("agents")
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
+model Commission {
+  id               String           @id @default(uuid())
+  agentId          String
+  customerId       String
+  subscriptionId   String?
+  paymentRequestId String?
+  amount           Decimal          @db.Decimal(15, 2)
+  status           CommissionStatus @default(PENDING)
+  notes            String?          @db.Text
+  payoutId         String?
+
+  agent            Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  customer         User             @relation("CustomerCommissions", fields: [customerId], references: [id])
+  subscription     UserSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  paymentRequest   PaymentRequest?  @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
+  payout           CommissionPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([agentId], name: "commission_agent_idx")
+  @@index([status], name: "commission_status_idx")
+  @@map("commissions")
+}
+
+enum PayoutStatus {
+  PENDING
+  PAID
+}
+
+model CommissionPayout {
+  id          String       @id @default(uuid())
+  agentId     String
+  totalAmount Decimal      @db.Decimal(15, 2)
+  status      PayoutStatus @default(PENDING)
+  paidAt      DateTime?
+  receiptUrl  String?
+  notes       String?      @db.Text
+  
+  agent       Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  commissions Commission[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([agentId], name: "payout_agent_idx")
+  @@map("commission_payouts")
 }
