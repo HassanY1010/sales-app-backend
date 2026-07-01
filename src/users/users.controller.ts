@@ -140,13 +140,40 @@ export class UsersController {
       );
     }
 
-    ensureLogoUploadDir();
     const filename = `${randomUUID()}${extension}`;
-    await writeFile(join(logoUploadDir, filename), file.buffer);
+    const projectId = process.env.SUPABASE_PROJECT_ID;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const bucket = process.env.SUPABASE_BUCKET || 'uploads';
 
-    return this.usersService.updateBusinessLogo(
-      userId,
-      `/uploads/logos/${filename}`,
-    );
+    if (projectId && serviceKey) {
+      try {
+        const uploadUrl = `https://${projectId}.supabase.co/storage/v1/object/${bucket}/${filename}`;
+        const response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${serviceKey}`,
+            'Content-Type': file.mimetype,
+          },
+          body: file.buffer,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Supabase upload failed: ${response.statusText} - ${errText}`);
+        }
+
+        const publicUrl = `https://${projectId}.supabase.co/storage/v1/object/public/${bucket}/${filename}`;
+        return this.usersService.updateBusinessLogo(userId, publicUrl);
+      } catch (error: any) {
+        throw new BadRequestException(`Failed to upload file to storage: ${error.message}`);
+      }
+    } else {
+      ensureLogoUploadDir();
+      await writeFile(join(logoUploadDir, filename), file.buffer);
+      return this.usersService.updateBusinessLogo(
+        userId,
+        `/uploads/logos/${filename}`,
+      );
+    }
   }
 }
