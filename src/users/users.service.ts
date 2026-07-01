@@ -78,7 +78,9 @@ export class UsersService {
 
   async changeSecurityPin(userId: string, pin: string) {
     if (!/^[A-Za-z0-9]{4}$/.test(pin)) {
-      throw new BadRequestException('Security PIN must be exactly 4 letters or digits');
+      throw new BadRequestException(
+        'Security PIN must be exactly 4 letters or digits',
+      );
     }
 
     const hashedPin = await bcrypt.hash(pin, 10);

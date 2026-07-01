@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -15,7 +20,10 @@ export class SubscriptionsService {
     private readonly commissionsService: CommissionsService,
   ) {}
 
-  async createPaymentRequest(userId: string, dto: { wallet: string; amount: number; notes?: string }) {
+  async createPaymentRequest(
+    userId: string,
+    dto: { wallet: string; amount: number; notes?: string },
+  ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { business: true },
@@ -63,7 +71,9 @@ export class SubscriptionsService {
       createdAt: paymentRequest.createdAt,
     });
 
-    this.logger.log(`Payment request created for user ${userId}: ${paymentRequest.id}`);
+    this.logger.log(
+      `Payment request created for user ${userId}: ${paymentRequest.id}`,
+    );
 
     return paymentRequest;
   }
@@ -172,13 +182,19 @@ export class SubscriptionsService {
 
     // Emit real-time update to user if connected
     if (request.businessId) {
-      this.eventsGateway.emitToBusiness(request.businessId, 'subscription-activated', {
-        expiryDate: oneYearFromNow,
-        message: 'تم تفعيل اشتراكك بنجاح!',
-      });
+      this.eventsGateway.emitToBusiness(
+        request.businessId,
+        'subscription-activated',
+        {
+          expiryDate: oneYearFromNow,
+          message: 'تم تفعيل اشتراكك بنجاح!',
+        },
+      );
     }
 
-    this.logger.log(`Payment request ${requestId} approved by admin ${adminId}`);
+    this.logger.log(
+      `Payment request ${requestId} approved by admin ${adminId}`,
+    );
 
     return { success: true, message: 'تم تفعيل الاشتراك بنجاح' };
   }
@@ -212,7 +228,9 @@ export class SubscriptionsService {
       { type: 'PAYMENT_REJECTED', paymentRequestId: requestId, reason },
     );
 
-    this.logger.log(`Payment request ${requestId} rejected by admin ${adminId}`);
+    this.logger.log(
+      `Payment request ${requestId} rejected by admin ${adminId}`,
+    );
 
     return { success: true, message: 'تم رفض طلب الدفع' };
   }
@@ -239,10 +257,13 @@ export class SubscriptionsService {
 
     const now = new Date();
     const expiryDate = user.business?.subscriptionExpiry;
-    
+
     // 2) Check if user has an active PAID subscription
-    const hasActiveSub = user.business?.subscriptionStatus === 'GOLD' && expiryDate && expiryDate > now;
-    
+    const hasActiveSub =
+      user.business?.subscriptionStatus === 'GOLD' &&
+      expiryDate &&
+      expiryDate > now;
+
     if (hasActiveSub) {
       return {
         status: 'active',
@@ -258,7 +279,9 @@ export class SubscriptionsService {
     trialExpiry.setDate(trialExpiry.getDate() + 90);
 
     if (now < trialExpiry) {
-      const daysLeft = Math.ceil((trialExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      const daysLeft = Math.ceil(
+        (trialExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+      );
       return {
         status: 'trial',
         isTrial: true,
@@ -293,7 +316,7 @@ export class SubscriptionsService {
     const now = new Date();
     const currentExpiry = business.subscriptionExpiry;
     let baseDate = now;
-    
+
     if (currentExpiry && currentExpiry > now) {
       baseDate = currentExpiry;
     } else if (!currentExpiry && business.createdAt) {
@@ -362,5 +385,174 @@ export class SubscriptionsService {
       pendingRequests,
       totalUsers,
     };
+  }
+
+  /**
+   * Activate a subscription using a pre-generated activation code.
+   * (Blocker-04)
+   */
+  async activateByCode(userId: string, code: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { business: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('المستخدم غير موجود');
+    }
+
+    // Only merchants (business users) can activate via code
+    if (!user.business) {
+      throw new BadRequestException('هذه الخاصية متاحة للتجار فقط');
+    }
+
+    // Find and validate the code
+    const activationCode = await this.prisma.activationCode.findUnique({
+      where: { code },
+    });
+
+    if (!activationCode) {
+      throw new NotFoundException('رمز التفعيل غير صحيح');
+    }
+
+    if (activationCode.isUsed) {
+      throw new BadRequestException('تم استخدام هذا الرمز مسبقاً');
+    }
+
+    const durationDays = activationCode.durationDays || 365;
+    const now = new Date();
+
+    // Extend from current expiry if still active, otherwise from now
+    const currentExpiry = user.business.subscriptionExpiry;
+    const baseDate = currentExpiry && currentExpiry > now ? currentExpiry : now;
+
+    const newExpiry = new Date(baseDate);
+    newExpiry.setDate(newExpiry.getDate() + durationDays);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Mark code as used
+      await tx.activationCode.update({
+        where: { code },
+        data: {
+          isUsed: true,
+          usedByUserId: userId,
+          usedAt: now,
+        },
+      });
+
+      // Upgrade business subscription
+      await tx.business.update({
+        where: { id: user.business!.id },
+        data: {
+          subscriptionStatus: 'GOLD',
+          subscriptionExpiry: newExpiry,
+        },
+      });
+
+      // Activate user account
+      await tx.user.update({
+        where: { id: userId },
+        data: { isActive: true },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'ACTIVATE',
+          resource: 'SUBSCRIPTION',
+          resourceId: activationCode.id,
+          details: {
+            code,
+            durationDays,
+            newExpiry: newExpiry.toISOString(),
+            businessId: user.business!.id,
+          },
+        },
+      });
+    });
+
+    await this.notificationsService.notifyUser(
+      userId,
+      'تم تفعيل الاشتراك',
+      `تم تفعيل اشتراكك بنجاح لمدة ${durationDays} يوم!`,
+      { type: 'SUBSCRIPTION_ACTIVATED', expiryDate: newExpiry },
+    );
+
+    this.eventsGateway.emitToBusiness(
+      user.business.id,
+      'subscription-activated',
+      {
+        expiryDate: newExpiry,
+        message: 'تم تفعيل اشتراكك بنجاح!',
+      },
+    );
+
+    this.logger.log(`Activation code ${code} used by user ${userId}`);
+
+    return {
+      success: true,
+      message: 'تم تفعيل الاشتراك بنجاح',
+      expiryDate: newExpiry.toISOString(),
+      durationDays,
+    };
+  }
+
+  async getPlans() {
+    return this.prisma.subscriptionPlan.findMany({
+      orderBy: { price: 'asc' },
+    });
+  }
+
+  async getPlanById(id: string) {
+    const plan = await this.prisma.subscriptionPlan.findUnique({
+      where: { id },
+    });
+    if (!plan) throw new NotFoundException('خطة الاشتراك غير موجودة');
+    return plan;
+  }
+
+  async createPlan(dto: any) {
+    return this.prisma.subscriptionPlan.create({
+      data: {
+        name: dto.name,
+        description: dto.description,
+        price: dto.price,
+        durationDays: dto.durationDays ?? 365,
+        features: dto.features ?? {},
+        isActive: dto.isActive ?? true,
+      },
+    });
+  }
+
+  async updatePlan(id: string, dto: any) {
+    const plan = await this.prisma.subscriptionPlan.findUnique({
+      where: { id },
+    });
+    if (!plan) throw new NotFoundException('خطة الاشتراك غير موجودة');
+
+    return this.prisma.subscriptionPlan.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description }),
+        ...(dto.price !== undefined && { price: dto.price }),
+        ...(dto.durationDays !== undefined && {
+          durationDays: dto.durationDays,
+        }),
+        ...(dto.features !== undefined && { features: dto.features }),
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
+      },
+    });
+  }
+
+  async deletePlan(id: string) {
+    const plan = await this.prisma.subscriptionPlan.findUnique({
+      where: { id },
+    });
+    if (!plan) throw new NotFoundException('خطة الاشتراك غير موجودة');
+
+    await this.prisma.subscriptionPlan.delete({ where: { id } });
+    return { success: true, message: 'تم حذف خطة الاشتراك بنجاح' };
   }
 }

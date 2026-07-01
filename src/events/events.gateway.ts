@@ -9,7 +9,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
 const allowedSocketOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
+  ? process.env.CORS_ORIGINS.split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
   : [
       'http://localhost:3000',
       'http://localhost:5173',
@@ -64,7 +66,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         const userSockets = this.activeSockets.get(businessId) || [];
         userSockets.push(client.id);
         this.activeSockets.set(businessId, userSockets);
-        this.logger.log(`Client connected: ${client.id} (Business: ${businessId})`);
+        this.logger.log(
+          `Client connected: ${client.id} (Business: ${businessId})`,
+        );
       }
     } catch (e) {
       client.disconnect();
@@ -73,7 +77,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private extractToken(client: Socket) {
     const authToken =
-      typeof client.handshake.auth?.token === 'string' ? client.handshake.auth.token : undefined;
+      typeof client.handshake.auth?.token === 'string'
+        ? client.handshake.auth.token
+        : undefined;
     const bearerToken =
       typeof client.handshake.headers.authorization === 'string'
         ? client.handshake.headers.authorization.split(' ')[1]
@@ -100,7 +106,10 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const businessId = client.data.businessId;
     const role = client.data.role;
 
-    if (role && (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPPORT')) {
+    if (
+      role &&
+      (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'SUPPORT')
+    ) {
       const adminSockets = this.adminSockets.get(role) || [];
       const index = adminSockets.indexOf(client.id);
       if (index > -1) {

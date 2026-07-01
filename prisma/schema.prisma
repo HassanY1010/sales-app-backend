@@ -111,6 +111,7 @@ model Business {
   requestedAdjustments  AdjustmentRequest[] @relation("AdjustmentRequester")
   receivedAdjustments   AdjustmentRequest[] @relation("AdjustmentReceiver")
   dueReminderLogs       DueReminderLog[]
+  expenses              Expense[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -229,6 +230,8 @@ model Transaction {
   receiverId      String
   orderId         String?
   note            String? @db.Text
+  paymentMethod   String?
+  transferNumber  String?
 
   // Relations
   sender   Business @relation("TransactionSender", fields: [senderId], references: [id])
@@ -322,9 +325,11 @@ model Expense {
   date        DateTime @default(now())
   
   userId      String
+  businessId  String?
 
   // Relations
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -596,4 +601,18 @@ model CommissionPayout {
 
   @@index([agentId], name: "payout_agent_idx")
   @@map("commission_payouts")
+}
+
+model ActivationCode {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  durationDays Int       @default(365)
+  isUsed       Boolean   @default(false)
+  usedByUserId String?
+  usedAt       DateTime?
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("activation_codes")
 }

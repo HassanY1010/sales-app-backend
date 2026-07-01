@@ -50,7 +50,9 @@ export class ConnectionsService {
     if (connection) {
       // 1. If currently accepted or pending, it's a conflict
       if (connection.status === 'ACCEPTED' || connection.status === 'PENDING') {
-        throw new ConflictException(`الارتباط موجود بالفعل أو قيد الانتظار (${connection.status})`);
+        throw new ConflictException(
+          `الارتباط موجود بالفعل أو قيد الانتظار (${connection.status})`,
+        );
       }
 
       // 2. If blocked, users must handle unblocking first
@@ -61,16 +63,24 @@ export class ConnectionsService {
       // 3. If rejected, handle the retry logic with cooldown and limit
       if (connection.status === 'REJECTED') {
         if (connection.retryCount >= 3) {
-          throw new BadRequestException('لقد استنفدت الحد الأقصى لمحاولات الإرسال (3 محاولات)');
+          throw new BadRequestException(
+            'لقد استنفدت الحد الأقصى لمحاولات الإرسال (3 محاولات)',
+          );
         }
 
-        const lastRequested = connection.lastRequestedAt ? new Date(connection.lastRequestedAt).getTime() : 0;
+        const lastRequested = connection.lastRequestedAt
+          ? new Date(connection.lastRequestedAt).getTime()
+          : 0;
         const cooldownMs = 24 * 60 * 60 * 1000; // 24 hours
         const now = Date.now();
 
         if (now - lastRequested < cooldownMs) {
-          const hoursLeft = Math.ceil((cooldownMs - (now - lastRequested)) / (60 * 60 * 1000));
-          throw new BadRequestException(`يرجى الانتظار ${hoursLeft} ساعة قبل إعادة المحاولة`);
+          const hoursLeft = Math.ceil(
+            (cooldownMs - (now - lastRequested)) / (60 * 60 * 1000),
+          );
+          throw new BadRequestException(
+            `يرجى الانتظار ${hoursLeft} ساعة قبل إعادة المحاولة`,
+          );
         }
 
         // Reset to pending
@@ -107,14 +117,18 @@ export class ConnectionsService {
       newConnection.receiver.user.id,
       'طلب ارتباط جديد',
       `يريد ${newConnection.requester.name} الارتباط بحسابك كـ ${dto.connectionType === 'SUPPLIER' ? 'مورد' : 'عميل'}`,
-      { type: 'NEW_CONNECTION_REQUEST', connectionId: newConnection.id }
+      { type: 'NEW_CONNECTION_REQUEST', connectionId: newConnection.id },
     );
 
-    this.eventsGateway.emitToBusiness(dto.receiverId, 'NEW_CONNECTION_REQUEST', {
-      id: newConnection.id,
-      requesterName: newConnection.requester.name,
-      connectionType: dto.connectionType,
-    });
+    this.eventsGateway.emitToBusiness(
+      dto.receiverId,
+      'NEW_CONNECTION_REQUEST',
+      {
+        id: newConnection.id,
+        requesterName: newConnection.requester.name,
+        connectionType: dto.connectionType,
+      },
+    );
 
     return newConnection;
   }
@@ -172,7 +186,8 @@ export class ConnectionsService {
                   ...(openingBalance !== 0 && {
                     balance: openingBalance,
                     totalCredit: openingBalance > 0 ? openingBalance : 0,
-                    totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+                    totalDebit:
+                      openingBalance < 0 ? Math.abs(openingBalance) : 0,
                   }),
                 },
               }
@@ -193,7 +208,7 @@ export class ConnectionsService {
           requester: { include: { user: true } },
           receiver: true,
         },
-      }) as any;
+      });
 
       // If there's an opening balance, create an ADJUSTMENT transaction to document it
       if (openingBalance !== 0) {
@@ -228,13 +243,17 @@ export class ConnectionsService {
         updated.requester.user.id,
         'تم قبول طلب الارتباط',
         `لقد قبل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
-        { type: 'CONNECTION_ACCEPTED', connectionId: updated.id }
+        { type: 'CONNECTION_ACCEPTED', connectionId: updated.id },
       );
 
-      this.eventsGateway.emitToBusiness(updated.requesterId, 'CONNECTION_ACCEPTED', {
-        id: updated.id,
-        receiverName: updated.receiver.name,
-      });
+      this.eventsGateway.emitToBusiness(
+        updated.requesterId,
+        'CONNECTION_ACCEPTED',
+        {
+          id: updated.id,
+          receiverName: updated.receiver.name,
+        },
+      );
 
       return updated;
     });
@@ -273,24 +292,29 @@ export class ConnectionsService {
       updated.requester.user.id,
       'تم رفض طلب الارتباط',
       `لقد تم رفض طلب الارتباط من قبل ${updated.receiver.name}.`,
-      { type: 'CONNECTION_REJECTED', connectionId: updated.id }
+      { type: 'CONNECTION_REJECTED', connectionId: updated.id },
     );
 
-    this.eventsGateway.emitToBusiness(updated.requesterId, 'CONNECTION_REJECTED', {
-      id: updated.id,
-      receiverName: updated.receiver.name,
-    });
+    this.eventsGateway.emitToBusiness(
+      updated.requesterId,
+      'CONNECTION_REJECTED',
+      {
+        id: updated.id,
+        receiverName: updated.receiver.name,
+      },
+    );
 
     return updated;
   }
 
-  async getConnections(businessId: string, pagination: PaginationDto, search?: string) {
+  async getConnections(
+    businessId: string,
+    pagination: PaginationDto,
+    search?: string,
+  ) {
     const { page = 1, limit = 10 } = pagination;
     const where: any = {
-      OR: [
-        { requesterId: businessId },
-        { receiverId: businessId },
-      ],
+      OR: [{ requesterId: businessId }, { receiverId: businessId }],
     };
 
     if (search) {
@@ -312,12 +336,26 @@ export class ConnectionsService {
         include: {
           requester: {
             include: {
-              user: { select: { id: true, fullName: true, userType: true, isActive: true } },
+              user: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  userType: true,
+                  isActive: true,
+                },
+              },
             },
           },
           receiver: {
             include: {
-              user: { select: { id: true, fullName: true, userType: true, isActive: true } },
+              user: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  userType: true,
+                  isActive: true,
+                },
+              },
             },
           },
           account: true,
@@ -331,7 +369,10 @@ export class ConnectionsService {
 
     const normalizedData = data.map((connection) => ({
       ...connection,
-      business: connection.requesterId === businessId ? connection.receiver : connection.requester,
+      business:
+        connection.requesterId === businessId
+          ? connection.receiver
+          : connection.requester,
       direction: connection.requesterId === businessId ? 'SENT' : 'RECEIVED',
     }));
 
@@ -355,13 +396,16 @@ export class ConnectionsService {
       throw new NotFoundException('الارتباط غير موجود');
     }
 
-    if (connection.requesterId !== businessId && connection.receiverId !== businessId) {
+    if (
+      connection.requesterId !== businessId &&
+      connection.receiverId !== businessId
+    ) {
       throw new BadRequestException('ليس لديك صلاحية على هذا الارتباط');
     }
 
     return this.prisma.connection.update({
       where: { id: connectionId },
-      data: { 
+      data: {
         status: 'BLOCKED',
         blockedById: businessId, // Record who blocked it
       },
@@ -389,14 +433,18 @@ export class ConnectionsService {
     // This requires the other party to re-accept explicitly.
     return this.prisma.connection.update({
       where: { id: connectionId },
-      data: { 
+      data: {
         status: 'PENDING',
         blockedById: null,
       },
     });
   }
-  
-  async toggleShowPrices(businessId: string, connectionId: string, show: boolean) {
+
+  async toggleShowPrices(
+    businessId: string,
+    connectionId: string,
+    show: boolean,
+  ) {
     const connection = await this.prisma.connection.findUnique({
       where: { id: connectionId },
     });
@@ -405,7 +453,10 @@ export class ConnectionsService {
       throw new NotFoundException('الارتباط غير موجود');
     }
 
-    if (connection.requesterId !== businessId && connection.receiverId !== businessId) {
+    if (
+      connection.requesterId !== businessId &&
+      connection.receiverId !== businessId
+    ) {
       throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
     }
 
@@ -438,12 +489,17 @@ export class ConnectionsService {
       });
 
       if (!targetUser) {
-        const shadowPassword = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+        const shadowPassword = await bcrypt.hash(
+          randomBytes(32).toString('hex'),
+          10,
+        );
         targetUser = await this.prisma.user.create({
           data: {
             phoneNumber: phoneNumber,
             fullName: name,
-            email: email || `shadow_${phoneNumber}_${randomBytes(4).toString('hex')}@local.invalid`,
+            email:
+              email ||
+              `shadow_${phoneNumber}_${randomBytes(4).toString('hex')}@local.invalid`,
             password: shadowPassword,
             userType: 'individual',
             isActive: false,
@@ -487,7 +543,9 @@ export class ConnectionsService {
               update: {
                 ...(creditLimit !== undefined && { creditLimit }),
                 ...(billingCycle !== undefined && { billingCycle }),
-                ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
+                ...(dueDate !== undefined && {
+                  dueDate: dueDate ? new Date(dueDate) : null,
+                }),
               },
             },
           },
@@ -523,7 +581,11 @@ export class ConnectionsService {
   async updateAccountTerms(
     businessId: string,
     connectionId: string,
-    terms: { creditLimit?: number; billingCycle?: string; dueDate?: string | null },
+    terms: {
+      creditLimit?: number;
+      billingCycle?: string;
+      dueDate?: string | null;
+    },
   ) {
     const connection = await this.prisma.connection.findUnique({
       where: { id: connectionId },
@@ -534,12 +596,17 @@ export class ConnectionsService {
       throw new NotFoundException('Connection not found');
     }
 
-    if (connection.requesterId !== businessId && connection.receiverId !== businessId) {
+    if (
+      connection.requesterId !== businessId &&
+      connection.receiverId !== businessId
+    ) {
       throw new ForbiddenException('You do not have access to this connection');
     }
 
     if (connection.status !== 'ACCEPTED' || !connection.account) {
-      throw new BadRequestException('Accepted connection with account is required');
+      throw new BadRequestException(
+        'Accepted connection with account is required',
+      );
     }
 
     if (terms.creditLimit !== undefined && terms.creditLimit < 0) {
@@ -549,8 +616,12 @@ export class ConnectionsService {
     const updated = await this.prisma.account.update({
       where: { id: connection.account.id },
       data: {
-        ...(terms.creditLimit !== undefined && { creditLimit: terms.creditLimit }),
-        ...(terms.billingCycle !== undefined && { billingCycle: terms.billingCycle }),
+        ...(terms.creditLimit !== undefined && {
+          creditLimit: terms.creditLimit,
+        }),
+        ...(terms.billingCycle !== undefined && {
+          billingCycle: terms.billingCycle,
+        }),
         ...(terms.dueDate !== undefined && {
           dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
         }),

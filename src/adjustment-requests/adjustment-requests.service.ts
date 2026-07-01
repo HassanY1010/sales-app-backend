@@ -30,15 +30,28 @@ export class AdjustmentRequestsService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  async create(businessId: string, userId: string, dto: CreateAdjustmentRequestDto) {
-    const target = await this.resolveTarget(businessId, dto.targetType, dto.targetId);
-    const receiverBusinessId = target.senderId === businessId ? target.receiverId : target.senderId;
+  async create(
+    businessId: string,
+    userId: string,
+    dto: CreateAdjustmentRequestDto,
+  ) {
+    const target = await this.resolveTarget(
+      businessId,
+      dto.targetType,
+      dto.targetId,
+    );
+    const receiverBusinessId =
+      target.senderId === businessId ? target.receiverId : target.senderId;
 
     if (!dto.requestedAmount && !dto.requestedDueDate && !dto.requestedNote) {
-      throw new BadRequestException('At least one requested change is required');
+      throw new BadRequestException(
+        'At least one requested change is required',
+      );
     }
 
-    const requestedAmount = dto.requestedAmount ? new Decimal(dto.requestedAmount) : undefined;
+    const requestedAmount = dto.requestedAmount
+      ? new Decimal(dto.requestedAmount)
+      : undefined;
     if (requestedAmount && requestedAmount.lessThan(0)) {
       throw new BadRequestException('Requested amount must be zero or greater');
     }
@@ -50,7 +63,9 @@ export class AdjustmentRequestsService {
         targetType: dto.targetType,
         targetId: dto.targetId,
         requestedAmount: requestedAmount?.toString(),
-        requestedDueDate: dto.requestedDueDate ? new Date(dto.requestedDueDate) : undefined,
+        requestedDueDate: dto.requestedDueDate
+          ? new Date(dto.requestedDueDate)
+          : undefined,
         requestedNote: dto.requestedNote,
         reason: dto.reason,
         createdById: userId,
@@ -90,7 +105,10 @@ export class AdjustmentRequestsService {
   ) {
     const { page = 1, limit = 20, status, targetType } = query;
     const where: any = {
-      OR: [{ requesterBusinessId: businessId }, { receiverBusinessId: businessId }],
+      OR: [
+        { requesterBusinessId: businessId },
+        { receiverBusinessId: businessId },
+      ],
     };
 
     if (status) where.status = status;
@@ -131,9 +149,14 @@ export class AdjustmentRequestsService {
 
   async approve(businessId: string, userId: string, id: string) {
     const request = await this.getPendingForReview(businessId, id);
-    const target = await this.resolveTarget(businessId, request.targetType as any, request.targetId);
+    const target = await this.resolveTarget(
+      businessId,
+      request.targetType as any,
+      request.targetId,
+    );
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // 1. Update non-amount metadata (dueDate, note) on the target record
       if (request.requestedDueDate || request.requestedNote) {
         if (request.targetType === 'ORDER') {
           await tx.order.update({
@@ -154,20 +177,70 @@ export class AdjustmentRequestsService {
         }
       }
 
+      // 2. Amount change — update the actual record, then rebuild balance
       if (request.requestedAmount) {
         const requestedAmount = new Decimal(request.requestedAmount as any);
         const difference = requestedAmount.minus(target.currentAmount);
 
+        if (request.targetType === 'ORDER') {
+          // 2a. Update the Order's total directly
+          await tx.order.update({
+            where: { id: request.targetId },
+            data: { total: requestedAmount.toString() },
+          });
+
+          // 2b. Update the linked SALE transaction's amount (if any)
+          const linkedTransaction = await tx.transaction.findFirst({
+            where: { orderId: request.targetId, transactionType: 'SALE' },
+          });
+          if (linkedTransaction) {
+            await tx.transaction.update({
+              where: { id: linkedTransaction.id },
+              data: { amount: requestedAmount.toString() },
+            });
+          }
+        } else {
+          // 2c. Update the Transaction's amount directly
+          await tx.transaction.update({
+            where: { id: request.targetId },
+            data: { amount: requestedAmount.toString() },
+          });
+        }
+
+        // 3. Record ledger ADJUSTMENT entry for the difference (only if non-zero)
         if (!difference.isZero()) {
           const increasesOriginalDirection = difference.greaterThan(0);
           await this.financeService.recordFinancialMovement(tx, {
-            senderId: increasesOriginalDirection ? target.senderId : target.receiverId,
-            receiverId: increasesOriginalDirection ? target.receiverId : target.senderId,
+            senderId: increasesOriginalDirection
+              ? target.senderId
+              : target.receiverId,
+            receiverId: increasesOriginalDirection
+              ? target.receiverId
+              : target.senderId,
             amount: difference.abs().toString(),
             type: 'ADJUSTMENT',
             note: `Approved adjustment request ${request.id} for ${target.label}`,
             userId,
           });
+        }
+
+        // 4. Rebuild account balance from ledger ground truth
+        const connection = await tx.connection.findFirst({
+          where: {
+            OR: [
+              { requesterId: target.senderId, receiverId: target.receiverId },
+              { requesterId: target.receiverId, receiverId: target.senderId },
+            ],
+            status: 'ACCEPTED',
+          },
+          include: { account: true },
+        });
+
+        if (connection?.account) {
+          await this.financeService.rebuildAccountBalance(
+            connection.account.id,
+            tx,
+          );
         }
       }
 
@@ -209,7 +282,12 @@ export class AdjustmentRequestsService {
     return updated;
   }
 
-  async reject(businessId: string, userId: string, id: string, rejectionReason: string) {
+  async reject(
+    businessId: string,
+    userId: string,
+    id: string,
+    rejectionReason: string,
+  ) {
     if (!rejectionReason?.trim() || rejectionReason.trim().length < 5) {
       throw new BadRequestException('Rejection reason is required');
     }
@@ -253,13 +331,19 @@ export class AdjustmentRequestsService {
   }
 
   private async getPendingForReview(businessId: string, id: string) {
-    const request = await this.prisma.adjustmentRequest.findUnique({ where: { id } });
+    const request = await this.prisma.adjustmentRequest.findUnique({
+      where: { id },
+    });
     if (!request) throw new NotFoundException('Adjustment request not found');
     if (request.receiverBusinessId !== businessId) {
-      throw new ForbiddenException('Only the receiving party can review this request');
+      throw new ForbiddenException(
+        'Only the receiving party can review this request',
+      );
     }
     if (request.status !== 'PENDING') {
-      throw new BadRequestException(`Adjustment request is already ${request.status}`);
+      throw new BadRequestException(
+        `Adjustment request is already ${request.status}`,
+      );
     }
     return request;
   }
@@ -270,7 +354,9 @@ export class AdjustmentRequestsService {
     targetId: string,
   ): Promise<TargetInfo> {
     if (targetType === 'ORDER') {
-      const order = await this.prisma.order.findUnique({ where: { id: targetId } });
+      const order = await this.prisma.order.findUnique({
+        where: { id: targetId },
+      });
       if (!order) throw new NotFoundException('Order not found');
       if (order.senderId !== businessId && order.receiverId !== businessId) {
         throw new ForbiddenException('You do not have access to this order');
@@ -287,10 +373,17 @@ export class AdjustmentRequestsService {
       };
     }
 
-    const transaction = await this.prisma.transaction.findUnique({ where: { id: targetId } });
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id: targetId },
+    });
     if (!transaction) throw new NotFoundException('Transaction not found');
-    if (transaction.senderId !== businessId && transaction.receiverId !== businessId) {
-      throw new ForbiddenException('You do not have access to this transaction');
+    if (
+      transaction.senderId !== businessId &&
+      transaction.receiverId !== businessId
+    ) {
+      throw new ForbiddenException(
+        'You do not have access to this transaction',
+      );
     }
 
     return {
@@ -306,8 +399,13 @@ export class AdjustmentRequestsService {
   }
 
   private ensureParticipant(businessId: string, request: any) {
-    if (request.requesterBusinessId !== businessId && request.receiverBusinessId !== businessId) {
-      throw new ForbiddenException('You do not have access to this adjustment request');
+    if (
+      request.requesterBusinessId !== businessId &&
+      request.receiverBusinessId !== businessId
+    ) {
+      throw new ForbiddenException(
+        'You do not have access to this adjustment request',
+      );
     }
   }
 
@@ -317,7 +415,12 @@ export class AdjustmentRequestsService {
     body: string,
     data: Record<string, any>,
   ) {
-    await this.notificationsService.notifyBusiness(businessId, title, body, data);
+    await this.notificationsService.notifyBusiness(
+      businessId,
+      title,
+      body,
+      data,
+    );
   }
 
   private includeRelations() {

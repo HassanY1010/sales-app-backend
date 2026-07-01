@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Body, UseGuards, ForbiddenException, Query, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  ForbiddenException,
+  Query,
+  Param,
+} from '@nestjs/common';
 import { BackupService } from './backup.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
@@ -31,7 +40,10 @@ export class BackupController {
   }
 
   @Get('google/auth-url')
-  async googleAuthUrl(@CurrentUser() user: any, @Query('redirectUri') redirectUri?: string) {
+  async googleAuthUrl(
+    @CurrentUser() user: any,
+    @Query('redirectUri') redirectUri?: string,
+  ) {
     this.ensureBusiness(user);
     return this.backupService.getGoogleAuthUrl(user.businessId, redirectUri);
   }
@@ -63,9 +75,16 @@ export class BackupController {
   }
 
   @Post('google/restore/:fileId')
-  async googleRestore(@CurrentUser() user: any, @Param('fileId') fileId: string) {
+  async googleRestore(
+    @CurrentUser() user: any,
+    @Param('fileId') fileId: string,
+  ) {
     this.ensureBusiness(user);
-    return this.backupService.restoreFromGoogleDrive(user.businessId, user.userId, fileId);
+    return this.backupService.restoreFromGoogleDrive(
+      user.businessId,
+      user.userId,
+      fileId,
+    );
   }
 
   private ensureBusiness(user: any) {

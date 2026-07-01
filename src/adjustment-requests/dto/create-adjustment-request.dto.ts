@@ -1,4 +1,10 @@
-import { IsEnum, IsNumberString, IsOptional, IsString, Length } from 'class-validator';
+import {
+  IsEnum,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  Length,
+} from 'class-validator';
 
 export class CreateAdjustmentRequestDto {
   @IsEnum(['ORDER', 'TRANSACTION'])

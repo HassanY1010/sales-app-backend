@@ -1,4 +1,15 @@
-import { Controller, Get, Patch, Post, Body, Param, UseGuards, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Body,
+  Param,
+  UseGuards,
+  Query,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../database/prisma.service';
@@ -22,7 +33,10 @@ export class NotificationsController {
     @CurrentUser() user: any,
     @Query() pagination: PaginationDto,
   ) {
-    return this.notificationsService.getUserNotifications(user.userId, pagination);
+    return this.notificationsService.getUserNotifications(
+      user.userId,
+      pagination,
+    );
   }
 
   @Get('count')
@@ -31,12 +45,18 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  async markAsRead(@CurrentUser() user: any, @Param('id') notificationId: string) {
+  async markAsRead(
+    @CurrentUser() user: any,
+    @Param('id') notificationId: string,
+  ) {
     return this.notificationsService.markAsRead(user.userId, notificationId);
   }
 
   @Post('mark-read')
-  async markNotificationsRead(@CurrentUser() user: any, @Body() dto: MarkNotificationsReadDto) {
+  async markNotificationsRead(
+    @CurrentUser() user: any,
+    @Body() dto: MarkNotificationsReadDto,
+  ) {
     return this.notificationsService.markManyAsRead(user.userId, dto.ids);
   }
 
@@ -50,7 +70,9 @@ export class NotificationsController {
     const isAdmin = ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'].includes(user.role);
 
     if (targetUserId && !isAdmin) {
-      throw new BadRequestException('لا يمكن إرسال إشعار مباشر إلا عبر نشاط مرتبط');
+      throw new BadRequestException(
+        'لا يمكن إرسال إشعار مباشر إلا عبر نشاط مرتبط',
+      );
     }
 
     if (body.targetBusinessId) {
@@ -59,15 +81,23 @@ export class NotificationsController {
           where: {
             status: 'ACCEPTED',
             OR: [
-              { requesterId: user.businessId, receiverId: body.targetBusinessId },
-              { requesterId: body.targetBusinessId, receiverId: user.businessId },
+              {
+                requesterId: user.businessId,
+                receiverId: body.targetBusinessId,
+              },
+              {
+                requesterId: body.targetBusinessId,
+                receiverId: user.businessId,
+              },
             ],
           },
           select: { id: true },
         });
 
         if (!connection) {
-          throw new BadRequestException('لا يمكنك إرسال إشعار إلا لطرف مرتبط بحسابك');
+          throw new BadRequestException(
+            'لا يمكنك إرسال إشعار إلا لطرف مرتبط بحسابك',
+          );
         }
       }
 
@@ -84,7 +114,9 @@ export class NotificationsController {
     }
 
     if (!targetUserId) {
-      throw new BadRequestException('يجب تحديد المستلم (معرف المستخدم أو النشاط التجاري)');
+      throw new BadRequestException(
+        'يجب تحديد المستلم (معرف المستخدم أو النشاط التجاري)',
+      );
     }
 
     // Verify target user exists to avoid DB constraint errors
@@ -124,21 +156,22 @@ export class NotificationsController {
     }
 
     if (connectionIds.length > 100) {
-      throw new BadRequestException('لا يمكن إرسال أكثر من 100 تنبيه في العملية الواحدة');
+      throw new BadRequestException(
+        'لا يمكن إرسال أكثر من 100 تنبيه في العملية الواحدة',
+      );
     }
 
     if (!message || message.length < 5 || message.length > 1000) {
-      throw new BadRequestException('نص التنبيه مطلوب ويجب أن يكون بين 5 و 1000 حرف');
+      throw new BadRequestException(
+        'نص التنبيه مطلوب ويجب أن يكون بين 5 و 1000 حرف',
+      );
     }
 
     const connections = await this.prisma.connection.findMany({
       where: {
         id: { in: connectionIds },
         status: 'ACCEPTED',
-        OR: [
-          { requesterId: user.businessId },
-          { receiverId: user.businessId },
-        ],
+        OR: [{ requesterId: user.businessId }, { receiverId: user.businessId }],
       },
       include: {
         account: true,
@@ -148,7 +181,9 @@ export class NotificationsController {
     });
 
     if (connections.length !== connectionIds.length) {
-      throw new BadRequestException('توجد اتصالات غير صالحة أو لا تملك صلاحية عليها');
+      throw new BadRequestException(
+        'توجد اتصالات غير صالحة أو لا تملك صلاحية عليها',
+      );
     }
 
     const sent = [];
@@ -165,7 +200,9 @@ export class NotificationsController {
       }
 
       const targetBusiness =
-        connection.requesterId === user.businessId ? connection.receiver : connection.requester;
+        connection.requesterId === user.businessId
+          ? connection.receiver
+          : connection.requester;
 
       const notification = await this.notificationsService.notifyUser(
         targetBusiness.userId,

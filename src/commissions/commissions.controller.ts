@@ -1,4 +1,13 @@
-import { Controller, Get, Patch, Body, Query, Param, UseGuards, ForbiddenException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Body,
+  Query,
+  Param,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
 import { CommissionsService } from './commissions.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -24,7 +33,7 @@ export class CommissionsController {
   async findByAgentId(
     @Param('agentId') agentId: string,
     @Query('status') status: CommissionStatus,
-    @CurrentUser() user: any
+    @CurrentUser() user: any,
   ) {
     // Verify user owns the agent profile or is Admin
     const isOwnerOrAdmin = await this.checkIsOwnerOrAdmin(user, agentId);
@@ -39,12 +48,15 @@ export class CommissionsController {
   async updateStatus(
     @Param('id') id: string,
     @Body('status') status: CommissionStatus,
-    @Body('notes') notes?: string
+    @Body('notes') notes?: string,
   ) {
     return this.commissionsService.updateStatus(id, status, notes);
   }
 
-  private async checkIsOwnerOrAdmin(user: any, agentId: string): Promise<boolean> {
+  private async checkIsOwnerOrAdmin(
+    user: any,
+    agentId: string,
+  ): Promise<boolean> {
     if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN) {
       return true;
     }

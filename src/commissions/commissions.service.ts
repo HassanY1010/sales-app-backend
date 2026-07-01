@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CommissionStatus, Prisma } from '@prisma/client';
@@ -19,11 +23,11 @@ export class CommissionsService {
     paymentRequestId: string,
     subscriptionId: string,
     userId: string,
-    amountPaid: number
+    amountPaid: number,
   ) {
     const user = await tx.user.findUnique({
       where: { id: userId },
-      select: { referredByAgentId: true }
+      select: { referredByAgentId: true },
     });
 
     if (!user || !user.referredByAgentId) {
@@ -33,7 +37,7 @@ export class CommissionsService {
     const agentId = user.referredByAgentId;
 
     const agent = await tx.agent.findUnique({
-      where: { id: agentId }
+      where: { id: agentId },
     });
 
     if (!agent || agent.status !== 'ACTIVE') {
@@ -59,7 +63,7 @@ export class CommissionsService {
         amount,
         status: CommissionStatus.PENDING,
         notes: `عمولة تلقائية محسوبة مقابل تفعيل اشتراك بقيمة ${amountPaid.toLocaleString()} ر.ي.`,
-      }
+      },
     });
 
     // 3. Notify the agent in real-time
@@ -73,18 +77,23 @@ export class CommissionsService {
         title,
         body,
         type: 'NEW_COMMISSION',
-      }
+      },
     });
 
     // We trigger FCM and Live Socket updates asynchronously after the transaction commits successfully
     // to avoid blocking the main transaction sequence.
     setTimeout(async () => {
       try {
-        await this.notificationsService.sendPushNotification(agent.userId, title, body, {
-          type: 'NEW_COMMISSION',
-          amount: amountNum.toString(),
-          commissionId: commission.id,
-        });
+        await this.notificationsService.sendPushNotification(
+          agent.userId,
+          title,
+          body,
+          {
+            type: 'NEW_COMMISSION',
+            amount: amountNum.toString(),
+            commissionId: commission.id,
+          },
+        );
       } catch (err) {
         // Log notification errors without throwing transaction errors
       }
@@ -107,23 +116,23 @@ export class CommissionsService {
               select: {
                 fullName: true,
                 phoneNumber: true,
-              }
-            }
-          }
+              },
+            },
+          },
         },
         customer: {
           select: {
             fullName: true,
             phoneNumber: true,
-          }
+          },
         },
         subscription: {
           include: {
-            plan: true
-          }
-        }
+            plan: true,
+          },
+        },
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -133,13 +142,13 @@ export class CommissionsService {
       include: {
         agent: {
           include: {
-            user: { select: { fullName: true } }
-          }
+            user: { select: { fullName: true } },
+          },
         },
         customer: {
-          select: { fullName: true }
-        }
-      }
+          select: { fullName: true },
+        },
+      },
     });
     if (!commission) {
       throw new NotFoundException('العمولة المطلوبة غير موجودة.');
@@ -151,15 +160,17 @@ export class CommissionsService {
     const commission = await this.findOne(id);
 
     if (commission.status === CommissionStatus.PAID) {
-      throw new BadRequestException('لا يمكن تعديل حالة عمولة تم صرفها مسبقاً.');
+      throw new BadRequestException(
+        'لا يمكن تعديل حالة عمولة تم صرفها مسبقاً.',
+      );
     }
 
     return this.prisma.commission.update({
       where: { id },
       data: {
         status,
-        notes: notes || commission.notes
-      }
+        notes: notes || commission.notes,
+      },
     });
   }
 }

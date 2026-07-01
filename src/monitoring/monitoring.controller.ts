@@ -10,7 +10,10 @@ export class MonitoringController {
 
   @Get('audit-logs')
   async getAuditLogs(@CurrentUser() user: any, @Query('limit') limit?: string) {
-    return this.monitoringService.getAuditLogs(user.userId, limit ? parseInt(limit, 10) : 50);
+    return this.monitoringService.getAuditLogs(
+      user.userId,
+      limit ? parseInt(limit, 10) : 50,
+    );
   }
 
   @Post('suggestions')
@@ -19,7 +22,11 @@ export class MonitoringController {
     @Body('content') content: string,
     @Body('whatsapp') whatsapp?: string,
   ) {
-    return this.monitoringService.createSuggestion(user.userId, content, whatsapp);
+    return this.monitoringService.createSuggestion(
+      user.userId,
+      content,
+      whatsapp,
+    );
   }
 
   @Get('subscription')

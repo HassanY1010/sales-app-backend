@@ -115,7 +115,10 @@ describe('AdminService', () => {
 
     it('should throw BadRequestException for SQL-injection-like status', async () => {
       await expect(
-        service.updateSuggestionStatus('suggestion-1', "'; DROP TABLE suggestions; --"),
+        service.updateSuggestionStatus(
+          'suggestion-1',
+          "'; DROP TABLE suggestions; --",
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -127,11 +130,21 @@ describe('AdminService', () => {
     });
 
     it('should update suggestion status when valid', async () => {
-      const mockSuggestion = { id: 'suggestion-1', status: 'OPEN', content: 'test' };
+      const mockSuggestion = {
+        id: 'suggestion-1',
+        status: 'OPEN',
+        content: 'test',
+      };
       mockPrisma.suggestion.findUnique.mockResolvedValue(mockSuggestion);
-      mockPrisma.suggestion.update.mockResolvedValue({ ...mockSuggestion, status: 'REVIEWED' });
+      mockPrisma.suggestion.update.mockResolvedValue({
+        ...mockSuggestion,
+        status: 'REVIEWED',
+      });
 
-      const result = await service.updateSuggestionStatus('suggestion-1', 'REVIEWED');
+      const result = await service.updateSuggestionStatus(
+        'suggestion-1',
+        'REVIEWED',
+      );
       expect(result.status).toBe('REVIEWED');
       expect(mockPrisma.suggestion.update).toHaveBeenCalledWith({
         where: { id: 'suggestion-1' },
@@ -139,14 +152,20 @@ describe('AdminService', () => {
       });
     });
 
-    it.each(['OPEN', 'REVIEWED', 'CLOSED'])('should accept valid status: %s', async (validStatus) => {
-      const mockSuggestion = { id: 'suggestion-1', status: 'OPEN' };
-      mockPrisma.suggestion.findUnique.mockResolvedValue(mockSuggestion);
-      mockPrisma.suggestion.update.mockResolvedValue({ ...mockSuggestion, status: validStatus });
-      await expect(
-        service.updateSuggestionStatus('suggestion-1', validStatus),
-      ).resolves.not.toThrow();
-    });
+    it.each(['OPEN', 'REVIEWED', 'CLOSED'])(
+      'should accept valid status: %s',
+      async (validStatus) => {
+        const mockSuggestion = { id: 'suggestion-1', status: 'OPEN' };
+        mockPrisma.suggestion.findUnique.mockResolvedValue(mockSuggestion);
+        mockPrisma.suggestion.update.mockResolvedValue({
+          ...mockSuggestion,
+          status: validStatus,
+        });
+        await expect(
+          service.updateSuggestionStatus('suggestion-1', validStatus),
+        ).resolves.not.toThrow();
+      },
+    );
   });
 
   // ----------------------------------------------------------------
@@ -187,9 +206,17 @@ describe('AdminService', () => {
     });
 
     it('should handle null aggregate sums gracefully', async () => {
-      mockPrisma.transaction.aggregate.mockResolvedValue({ _sum: { amount: null }, _count: { id: 0 } });
-      mockPrisma.order.aggregate.mockResolvedValue({ _sum: { total: null }, _count: { id: 0 } });
-      mockPrisma.account.aggregate.mockResolvedValue({ _sum: { totalDebit: null, totalCredit: null } });
+      mockPrisma.transaction.aggregate.mockResolvedValue({
+        _sum: { amount: null },
+        _count: { id: 0 },
+      });
+      mockPrisma.order.aggregate.mockResolvedValue({
+        _sum: { total: null },
+        _count: { id: 0 },
+      });
+      mockPrisma.account.aggregate.mockResolvedValue({
+        _sum: { totalDebit: null, totalCredit: null },
+      });
 
       const result = await service.getFinancialReport();
       expect(result.totalRevenue).toBe('0');
@@ -205,17 +232,26 @@ describe('AdminService', () => {
     it('should throw NotFoundException for non-existent user', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
       await expect(
-        service.toggleUserStatus({ userId: 'nonexistent', isActive: false }, 'admin-1'),
+        service.toggleUserStatus(
+          { userId: 'nonexistent', isActive: false },
+          'admin-1',
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
     it('should update user status and log the action', async () => {
       const mockUser = { id: 'user-1', isActive: true, fullName: 'Test User' };
       mockPrisma.user.findUnique.mockResolvedValue(mockUser);
-      mockPrisma.user.update.mockResolvedValue({ ...mockUser, isActive: false });
+      mockPrisma.user.update.mockResolvedValue({
+        ...mockUser,
+        isActive: false,
+      });
       mockPrisma.adminAction.create.mockResolvedValue({});
 
-      await service.toggleUserStatus({ userId: 'user-1', isActive: false }, 'admin-1');
+      await service.toggleUserStatus(
+        { userId: 'user-1', isActive: false },
+        'admin-1',
+      );
 
       expect(mockPrisma.user.update).toHaveBeenCalledWith({
         where: { id: 'user-1' },
@@ -245,7 +281,11 @@ describe('AdminService', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrisma.adjustmentRequest.findUnique.mockResolvedValue(null);
       await expect(
-        service.rejectAdjustmentRequest('nonexistent', 'Valid reason here', 'admin-1'),
+        service.rejectAdjustmentRequest(
+          'nonexistent',
+          'Valid reason here',
+          'admin-1',
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -257,7 +297,11 @@ describe('AdminService', () => {
         targetId: 'inv-1',
       });
       await expect(
-        service.rejectAdjustmentRequest('req-1', 'Valid reason here', 'admin-1'),
+        service.rejectAdjustmentRequest(
+          'req-1',
+          'Valid reason here',
+          'admin-1',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
   });

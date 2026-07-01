@@ -58,10 +58,15 @@ export class AuditService {
     }
 
     if (value && typeof value === 'object') {
-      return Object.entries(value).reduce<Record<string, any>>((acc, [key, item]) => {
-        acc[key] = this.sensitiveKeys.has(key) ? '[REDACTED]' : this.sanitize(item);
-        return acc;
-      }, {});
+      return Object.entries(value).reduce<Record<string, any>>(
+        (acc, [key, item]) => {
+          acc[key] = this.sensitiveKeys.has(key)
+            ? '[REDACTED]'
+            : this.sanitize(item);
+          return acc;
+        },
+        {},
+      );
     }
 
     return value;

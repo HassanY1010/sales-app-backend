@@ -1,4 +1,14 @@
-import { Controller, Post, Get, Patch, Body, Param, UseGuards, Req, ForbiddenException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Body,
+  Param,
+  UseGuards,
+  Req,
+  ForbiddenException,
+} from '@nestjs/common';
 import { AgentsService } from './agents.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -18,7 +28,7 @@ export class AgentsController {
       valid: true,
       referralCode: agent.referralCode,
       agentId: agent.id,
-      fullName: agent.userId, // We can return basic details if needed
+      fullName: (agent as any).user?.fullName || '',
     };
   }
 
@@ -36,7 +46,13 @@ export class AgentsController {
     @Body('commissionType') commissionType?: CommissionType,
     @Body('commissionValue') commissionValue?: number,
   ) {
-    return this.agentsService.create(userId, regionId, commissionType, commissionValue, referralCode);
+    return this.agentsService.create(
+      userId,
+      regionId,
+      commissionType,
+      commissionValue,
+      referralCode,
+    );
   }
 
   @Get()
@@ -85,7 +101,11 @@ export class AgentsController {
   async findOne(@Param('id') id: string, @CurrentUser() user: any) {
     const agent = await this.agentsService.findOne(id);
     // Allow Admins, or the Agent themselves
-    if (user.role !== UserRole.SUPER_ADMIN && user.role !== UserRole.ADMIN && user.userId !== agent.userId) {
+    if (
+      user.role !== UserRole.SUPER_ADMIN &&
+      user.role !== UserRole.ADMIN &&
+      user.userId !== agent.userId
+    ) {
       throw new ForbiddenException('غير مصرح لك بعرض بيانات هذا المندوب.');
     }
     return agent;
@@ -96,7 +116,11 @@ export class AgentsController {
   async getDashboard(@Param('id') id: string, @CurrentUser() user: any) {
     const agent = await this.agentsService.findOne(id);
     // Allow Admins, or the Agent themselves
-    if (user.role !== UserRole.SUPER_ADMIN && user.role !== UserRole.ADMIN && user.userId !== agent.userId) {
+    if (
+      user.role !== UserRole.SUPER_ADMIN &&
+      user.role !== UserRole.ADMIN &&
+      user.userId !== agent.userId
+    ) {
       throw new ForbiddenException('غير مصرح لك بعرض بيانات هذا المندوب.');
     }
     return this.agentsService.getDashboardMetrics(id);
@@ -107,7 +131,13 @@ export class AgentsController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   async update(
     @Param('id') id: string,
-    @Body() body: { regionId?: string; commissionType?: CommissionType; commissionValue?: number; status?: AgentStatus }
+    @Body()
+    body: {
+      regionId?: string;
+      commissionType?: CommissionType;
+      commissionValue?: number;
+      status?: AgentStatus;
+    },
   ) {
     return this.agentsService.update(id, body);
   }
@@ -117,7 +147,7 @@ export class AgentsController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   async updateCommission(
     @Param('id') id: string,
-    @Body() body: { commissionType: CommissionType; commissionValue: number }
+    @Body() body: { commissionType: CommissionType; commissionValue: number },
   ) {
     return this.agentsService.update(id, body);
   }
@@ -127,7 +157,7 @@ export class AgentsController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
   async setStatus(
     @Param('id') id: string,
-    @Body() body: { status: AgentStatus }
+    @Body() body: { status: AgentStatus },
   ) {
     return this.agentsService.update(id, body);
   }

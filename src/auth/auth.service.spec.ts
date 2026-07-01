@@ -69,7 +69,12 @@ describe('AuthService', () => {
     });
 
     expect(prisma.user.findFirst).toHaveBeenCalledWith({
-      where: { OR: [{ email: 'owner@example.com' }, { phoneNumber: 'owner@example.com' }] },
+      where: {
+        OR: [
+          { email: 'owner@example.com' },
+          { phoneNumber: 'owner@example.com' },
+        ],
+      },
       include: { business: true },
     });
     expect(result.accessToken).toBe('access-token');

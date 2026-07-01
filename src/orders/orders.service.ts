@@ -7,7 +7,10 @@ import {
 import { Decimal } from 'decimal.js';
 import { PrismaService } from '../database/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { UpdateOrderPricesDto, UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import {
+  UpdateOrderPricesDto,
+  UpdateOrderStatusDto,
+} from './dto/update-order-status.dto';
 import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -39,26 +42,42 @@ export class OrdersService {
     });
 
     if (!connection?.account) {
-      throw new BadRequestException('يجب وجود ارتباط مقبول وحساب مالي لإنشاء طلبية');
+      throw new BadRequestException(
+        'يجب وجود ارتباط مقبول وحساب مالي لإنشاء طلبية',
+      );
     }
 
     const [senderBusiness, receiverBusiness] = await Promise.all([
-      this.prisma.business.findUnique({ where: { id: senderId }, include: { user: true } }),
-      this.prisma.business.findUnique({ where: { id: dto.receiverId }, include: { user: true } }),
+      this.prisma.business.findUnique({
+        where: { id: senderId },
+        include: { user: true },
+      }),
+      this.prisma.business.findUnique({
+        where: { id: dto.receiverId },
+        include: { user: true },
+      }),
     ]);
 
     if (!senderBusiness || !receiverBusiness) {
       throw new BadRequestException('الطرف المرسل أو المستقبل غير صالح');
     }
 
-    if (userType === 'individual' && receiverBusiness.user.userType !== 'business') {
-      throw new ForbiddenException('المستهلك يمكنه إرسال طلبيات شراء لحسابات تجارية فقط');
+    if (
+      userType === 'individual' &&
+      receiverBusiness.user.userType !== 'business'
+    ) {
+      throw new ForbiddenException(
+        'المستهلك يمكنه إرسال طلبيات شراء لحسابات تجارية فقط',
+      );
     }
 
-    const pricesVisible = dto.pricesVisible ?? (connection.showPrices || userType === 'business');
+    const pricesVisible =
+      dto.pricesVisible ?? (connection.showPrices || userType === 'business');
     let subtotal = new Decimal(0);
     const itemsData = dto.items.map((item) => {
-      const unitPrice = pricesVisible ? new Decimal(item.unitPrice || '0') : new Decimal(0);
+      const unitPrice = pricesVisible
+        ? new Decimal(item.unitPrice || '0')
+        : new Decimal(0);
       const total = unitPrice.mul(item.quantity);
       subtotal = subtotal.plus(total);
       return {
@@ -89,7 +108,9 @@ export class OrdersService {
 
     const orderNumber = `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
     const currency = dto.currency || connection.account.currency || 'YER';
-    const dueDate = dto.dueDate ? new Date(dto.dueDate) : connection.account.dueDate;
+    const dueDate = dto.dueDate
+      ? new Date(dto.dueDate)
+      : connection.account.dueDate;
 
     return this.prisma.$transaction(async (prisma) => {
       const order = await prisma.order.create({
@@ -177,7 +198,9 @@ export class OrdersService {
 
   async getOrders(businessId: string, pagination: PaginationDto) {
     const { page = 1, limit = 10 } = pagination;
-    const where = { OR: [{ senderId: businessId }, { receiverId: businessId }] };
+    const where = {
+      OR: [{ senderId: businessId }, { receiverId: businessId }],
+    };
 
     const [data, total] = await Promise.all([
       this.prisma.order.findMany({
@@ -191,7 +214,9 @@ export class OrdersService {
     ]);
 
     return {
-      data: data.map((order) => this.sanitizeOrderForBusiness(order, businessId)),
+      data: data.map((order) =>
+        this.sanitizeOrderForBusiness(order, businessId),
+      ),
       meta: {
         total,
         page,
@@ -245,14 +270,17 @@ export class OrdersService {
       throw new BadRequestException('لا يمكن تعديل أسعار طلبية غير معلقة');
     }
 
-    const priceMap = new Map(dto.items.map((item) => [item.id, new Decimal(item.unitPrice)]));
+    const priceMap = new Map(
+      dto.items.map((item) => [item.id, new Decimal(item.unitPrice)]),
+    );
     let subtotal = new Decimal(0);
     const tax = new Decimal(dto.tax || '0');
     const discount = new Decimal(dto.discount || '0');
 
     await this.prisma.$transaction(async (prisma) => {
       for (const item of order.items) {
-        const unitPrice = priceMap.get(item.id) ?? new Decimal(item.unitPrice as any);
+        const unitPrice =
+          priceMap.get(item.id) ?? new Decimal(item.unitPrice as any);
         const total = unitPrice.mul(item.quantity);
         subtotal = subtotal.plus(total);
         await prisma.orderItem.update({
@@ -308,14 +336,19 @@ export class OrdersService {
     }
 
     if (userType === 'individual' && order.receiverId === businessId) {
-      throw new ForbiddenException('حساب المستهلك لا يستقبل أو يعالج طلبيات بيع');
+      throw new ForbiddenException(
+        'حساب المستهلك لا يستقبل أو يعالج طلبيات بيع',
+      );
     }
 
     if (userType === 'individual' && dto.status !== 'CANCELLED') {
       throw new ForbiddenException('المستهلك يمكنه إلغاء طلبياته المرسلة فقط');
     }
 
-    if (['ACCEPTED', 'REJECTED', 'COMPLETED'].includes(dto.status) && order.receiverId !== businessId) {
+    if (
+      ['ACCEPTED', 'REJECTED', 'COMPLETED'].includes(dto.status) &&
+      order.receiverId !== businessId
+    ) {
       throw new ForbiddenException('فقط المستقبل يمكنه تنفيذ هذا الإجراء');
     }
 
@@ -353,8 +386,12 @@ export class OrdersService {
         });
 
         if (connection?.account) {
-          const currentDebit = new Decimal(connection.account.totalDebit as any);
-          const creditLimit = new Decimal(connection.account.creditLimit as any);
+          const currentDebit = new Decimal(
+            connection.account.totalDebit as any,
+          );
+          const creditLimit = new Decimal(
+            connection.account.creditLimit as any,
+          );
           const orderTotal = new Decimal(order.total as any);
           const newDebt = currentDebit.plus(orderTotal);
 
@@ -409,7 +446,8 @@ export class OrdersService {
       where: { id: orderId },
       data: {
         status: dto.status,
-        rejectionReason: dto.status === 'REJECTED' ? dto.rejectionReason : undefined,
+        rejectionReason:
+          dto.status === 'REJECTED' ? dto.rejectionReason : undefined,
         rejectedById: dto.status === 'REJECTED' ? businessId : undefined,
       },
     });
@@ -432,7 +470,11 @@ export class OrdersService {
     return updated;
   }
 
-  private async notifyOrderStatusUpdate(order: any, status: string, reason?: string) {
+  private async notifyOrderStatusUpdate(
+    order: any,
+    status: string,
+    reason?: string,
+  ) {
     if (!order) return;
 
     const targetBusiness = await this.prisma.business.findUnique({
@@ -450,7 +492,10 @@ export class OrdersService {
       PRICES_ACCEPTED: 'تم اعتماد الأسعار',
     };
 
-    const title = status === 'PRICES_ACCEPTED' ? 'اعتماد أسعار الطلبية' : 'تحديث حالة الطلبية';
+    const title =
+      status === 'PRICES_ACCEPTED'
+        ? 'اعتماد أسعار الطلبية'
+        : 'تحديث حالة الطلبية';
     let body = `تم تغيير حالة الطلبية #${order.orderNumber} إلى ${statusMapAr[status] || status}`;
     if (status === 'REJECTED' && reason) {
       body += `\nالسبب: ${reason}`;
@@ -472,7 +517,12 @@ export class OrdersService {
   }
 
   private sanitizeOrderForBusiness(order: any, businessId: string) {
-    if (!order || order.receiverId === businessId || order.pricesVisible || order.status !== 'PENDING') {
+    if (
+      !order ||
+      order.receiverId === businessId ||
+      order.pricesVisible ||
+      order.status !== 'PENDING'
+    ) {
       return order;
     }
 
@@ -482,11 +532,12 @@ export class OrdersService {
       tax: '0',
       discount: '0',
       total: '0',
-      items: order.items?.map((item: any) => ({
-        ...item,
-        unitPrice: '0',
-        total: '0',
-      })) ?? [],
+      items:
+        order.items?.map((item: any) => ({
+          ...item,
+          unitPrice: '0',
+          total: '0',
+        })) ?? [],
     };
   }
 }

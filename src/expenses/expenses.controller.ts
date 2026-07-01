@@ -22,17 +22,17 @@ export class ExpensesController {
 
   @Post()
   create(@CurrentUser() user: any, @Body() dto: CreateExpenseDto) {
-    return this.expensesService.create(user.userId, dto);
+    return this.expensesService.create(user.userId, user.businessId || '', dto);
   }
 
   @Get()
   findAll(@CurrentUser() user: any, @Query() pagination: PaginationDto) {
-    return this.expensesService.findAll(user.userId, pagination);
+    return this.expensesService.findAll(user.businessId || '', pagination);
   }
 
   @Get(':id')
   findOne(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.expensesService.findOne(user.userId, id);
+    return this.expensesService.findOne(user.businessId || '', id);
   }
 
   @Put(':id')
@@ -41,11 +41,11 @@ export class ExpensesController {
     @Param('id') id: string,
     @Body() dto: Partial<CreateExpenseDto>,
   ) {
-    return this.expensesService.update(user.userId, id, dto);
+    return this.expensesService.update(user.businessId || '', id, dto);
   }
 
   @Delete(':id')
   remove(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.expensesService.remove(user.userId, id);
+    return this.expensesService.remove(user.businessId || '', id);
   }
 }

@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../database/prisma.service';
 import { FinanceService } from '../finance/finance.service';
@@ -59,14 +63,22 @@ describe('OrdersService', () => {
   describe('createOrder', () => {
     it('should throw if sender equals receiver', async () => {
       await expect(
-        service.createOrder('biz-1', { receiverId: 'biz-1', items: [] } as any, 'business'),
+        service.createOrder(
+          'biz-1',
+          { receiverId: 'biz-1', items: [] } as any,
+          'business',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('should throw if no accepted connection exists', async () => {
       mockPrisma.connection.findFirst.mockResolvedValue(null);
       await expect(
-        service.createOrder('biz-1', { receiverId: 'biz-2', items: [] } as any, 'business'),
+        service.createOrder(
+          'biz-1',
+          { receiverId: 'biz-2', items: [] } as any,
+          'business',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -109,7 +121,13 @@ describe('OrdersService', () => {
         requesterId: 'biz-1',
         receiverId: 'biz-2',
         showPrices: false,
-        account: { id: 'acc-1', totalDebit: 0, creditLimit: 1000, currency: 'YER', dueDate: null },
+        account: {
+          id: 'acc-1',
+          totalDebit: 0,
+          creditLimit: 1000,
+          currency: 'YER',
+          dueDate: null,
+        },
       });
       mockPrisma.business.findUnique.mockResolvedValue({
         id: 'biz-2',
@@ -134,7 +152,12 @@ describe('OrdersService', () => {
     it('should throw NotFoundException for unknown order', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(null);
       await expect(
-        service.updateOrderStatus('biz-1', 'order-999', { status: 'ACCEPTED' } as any, 'business'),
+        service.updateOrderStatus(
+          'biz-1',
+          'order-999',
+          { status: 'ACCEPTED' } as any,
+          'business',
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -150,7 +173,12 @@ describe('OrdersService', () => {
         items: [],
       });
       await expect(
-        service.updateOrderStatus('biz-X', 'order-1', { status: 'ACCEPTED' } as any, 'business'),
+        service.updateOrderStatus(
+          'biz-X',
+          'order-1',
+          { status: 'ACCEPTED' } as any,
+          'business',
+        ),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -166,7 +194,12 @@ describe('OrdersService', () => {
         items: [],
       });
       await expect(
-        service.updateOrderStatus('biz-B', 'order-1', { status: 'ACCEPTED' } as any, 'business'),
+        service.updateOrderStatus(
+          'biz-B',
+          'order-1',
+          { status: 'ACCEPTED' } as any,
+          'business',
+        ),
       ).rejects.toThrow(/اعتماد الأسعار/);
     });
 
@@ -182,7 +215,12 @@ describe('OrdersService', () => {
         items: [],
       });
       await expect(
-        service.updateOrderStatus('biz-B', 'order-1', { status: 'REJECTED' } as any, 'business'),
+        service.updateOrderStatus(
+          'biz-B',
+          'order-1',
+          { status: 'REJECTED' } as any,
+          'business',
+        ),
       ).rejects.toThrow(/سبب الرفض/);
     });
 
@@ -225,7 +263,12 @@ describe('OrdersService', () => {
       });
 
       await expect(
-        service.updateOrderStatus('biz-B', 'order-1', { status: 'ACCEPTED' } as any, 'business'),
+        service.updateOrderStatus(
+          'biz-B',
+          'order-1',
+          { status: 'ACCEPTED' } as any,
+          'business',
+        ),
       ).rejects.toThrow(/سقف المديونية/);
     });
   });
@@ -236,7 +279,9 @@ describe('OrdersService', () => {
   describe('getOrderById', () => {
     it('should throw NotFoundException for non-existent order', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(null);
-      await expect(service.getOrderById('biz-1', 'order-X')).rejects.toThrow(NotFoundException);
+      await expect(service.getOrderById('biz-1', 'order-X')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should throw ForbiddenException if business is not party to the order', async () => {
@@ -248,7 +293,9 @@ describe('OrdersService', () => {
         status: 'PENDING',
         items: [],
       });
-      await expect(service.getOrderById('biz-X', 'order-1')).rejects.toThrow(ForbiddenException);
+      await expect(service.getOrderById('biz-X', 'order-1')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 });

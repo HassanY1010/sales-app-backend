@@ -11,7 +11,8 @@ describe('Application smoke and auth boundaries (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeEach(async () => {
-    process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-with-at-least-32-characters';
+    process.env.JWT_SECRET =
+      process.env.JWT_SECRET || 'test-secret-with-at-least-32-characters';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -57,7 +58,9 @@ describe('Application smoke and auth boundaries (e2e)', () => {
   });
 
   it('serves health without exposing database internals on success', async () => {
-    const response = await request(app.getHttpServer()).get('/health').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/health')
+      .expect(200);
 
     expect(response.body).toMatchObject({
       status: 'ok',
@@ -67,8 +70,6 @@ describe('Application smoke and auth boundaries (e2e)', () => {
   });
 
   it('blocks protected report endpoints without authentication', () => {
-    return request(app.getHttpServer())
-      .get('/reports/summary')
-      .expect(401);
+    return request(app.getHttpServer()).get('/reports/summary').expect(401);
   });
 });

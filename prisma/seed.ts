@@ -24,6 +24,17 @@ async function main() {
   });
 
   console.log('Admin user created/updated:', admin.email);
+
+  // Seed default regions
+  const regions = ['صنعاء', 'تعز', 'عدن', 'حضرموت', 'الحديدة'];
+  for (const name of regions) {
+    await prisma.region.upsert({
+      where: { name },
+      update: {},
+      create: { name },
+    });
+  }
+  console.log('Default regions seeded successfully.');
 }
 
 main()

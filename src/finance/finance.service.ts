@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { Decimal } from 'decimal.js';
 import { Prisma } from '@prisma/client';
@@ -40,7 +44,8 @@ export class FinanceService {
       userId?: string; // For audit logging
     },
   ) {
-    const { senderId, receiverId, amount, type, orderId, note, userId } = params;
+    const { senderId, receiverId, amount, type, orderId, note, userId } =
+      params;
     const decimalAmount = new Decimal(amount.toString());
 
     if (senderId === receiverId) {
@@ -48,11 +53,11 @@ export class FinanceService {
     }
 
     // 1. Find the connection and account - USE RAW QUERY FOR ROW-LEVEL LOCKING
-    // Prisma's findUnique doesn't support 'FOR UPDATE' easily across all versions, 
+    // Prisma's findUnique doesn't support 'FOR UPDATE' easily across all versions,
     // so we use a raw query or ensure the transaction isolation level handles it.
     // However, in $transaction, subsequent updates to the same row are naturally queued.
     // To be 100% safe against stale reads in the same transaction, we fetch the account.
-    
+
     const connection = await tx.connection.findFirst({
       where: {
         OR: [
@@ -65,7 +70,9 @@ export class FinanceService {
     });
 
     if (!connection || !connection.account) {
-      throw new BadRequestException('Active connection and financial account required');
+      throw new BadRequestException(
+        'Active connection and financial account required',
+      );
     }
 
     // 2. Calculate balance change from requester's perspective
@@ -76,16 +83,24 @@ export class FinanceService {
 
     switch (type) {
       case 'SALE': // Sender sold -> Receiver owes Sender more
-        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        balanceChange = isSenderRequester
+          ? decimalAmount
+          : decimalAmount.negated();
         break;
       case 'PURCHASE': // Sender bought -> Sender owes Receiver more
-        balanceChange = isSenderRequester ? decimalAmount.negated() : decimalAmount;
+        balanceChange = isSenderRequester
+          ? decimalAmount.negated()
+          : decimalAmount;
         break;
       case 'PAYMENT': // Sender paid Receiver -> Sender's debt decreases
-        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        balanceChange = isSenderRequester
+          ? decimalAmount
+          : decimalAmount.negated();
         break;
       case 'ADJUSTMENT':
-        balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        balanceChange = isSenderRequester
+          ? decimalAmount
+          : decimalAmount.negated();
         break;
     }
 
@@ -101,8 +116,12 @@ export class FinanceService {
     // 4. Update totalCredit and totalDebit based on the NEW balance
     // This maintains the "Snapshot" for easy UI reading
     const newBalance = new Decimal(updatedAccount.balance as any);
-    const newTotalCredit = newBalance.greaterThan(0) ? newBalance : new Decimal(0);
-    const newTotalDebit = newBalance.lessThan(0) ? newBalance.abs() : new Decimal(0);
+    const newTotalCredit = newBalance.greaterThan(0)
+      ? newBalance
+      : new Decimal(0);
+    const newTotalDebit = newBalance.lessThan(0)
+      ? newBalance.abs()
+      : new Decimal(0);
 
     await tx.account.update({
       where: { id: updatedAccount.id },
@@ -119,7 +138,9 @@ export class FinanceService {
         voucherNumber: params.voucherNumber || this.generateVoucherNumber(type),
         amount: decimalAmount.toString(),
         currency: params.currency || connection.account.currency || 'YER',
-        dueDate: params.dueDate ? new Date(params.dueDate) : connection.account.dueDate,
+        dueDate: params.dueDate
+          ? new Date(params.dueDate)
+          : connection.account.dueDate,
         attachmentUrl: params.attachmentUrl,
         balanceAfter: newBalance.toString(),
         senderId,
@@ -168,10 +189,16 @@ export class FinanceService {
 
   private async notifyFinancialMovement(params: any, newBalance: Decimal) {
     const { senderId, receiverId, amount, type, note } = params;
-    
+
     // Fetch participants for notification
-    const sender = await this.prisma.business.findUnique({ where: { id: senderId }, include: { user: true } });
-    const receiver = await this.prisma.business.findUnique({ where: { id: receiverId }, include: { user: true } });
+    const sender = await this.prisma.business.findUnique({
+      where: { id: senderId },
+      include: { user: true },
+    });
+    const receiver = await this.prisma.business.findUnique({
+      where: { id: receiverId },
+      include: { user: true },
+    });
 
     if (!receiver) return;
 
@@ -186,7 +213,7 @@ export class FinanceService {
         body = `لقد استلمت مبلغ ${amountStr} من ${sender?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`;
         break;
       case 'SALE':
-        // Notification for Sale is usually handled by Order service, 
+        // Notification for Sale is usually handled by Order service,
         // but if it's a direct transaction, we handle it here.
         title = 'فاتورة جديدة';
         body = `تم تسجيل فاتورة بقيمة ${amountStr} من ${sender?.name}.`;
@@ -202,7 +229,7 @@ export class FinanceService {
         receiver.user.id,
         title,
         body,
-        { type: 'FINANCIAL_UPDATE', amount: amountStr, transactionType: type }
+        { type: 'FINANCIAL_UPDATE', amount: amountStr, transactionType: type },
       );
 
       this.eventsGateway.emitToBusiness(receiverId, 'FINANCIAL_UPDATE', {
@@ -218,7 +245,11 @@ export class FinanceService {
           sender.user.id,
           'تم تسجيل سند قبض',
           `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
-          { type: 'PAYMENT_RECEIVED', amount: amountStr, transactionType: type }
+          {
+            type: 'PAYMENT_RECEIVED',
+            amount: amountStr,
+            transactionType: type,
+          },
         );
 
         this.eventsGateway.emitToBusiness(senderId, 'FINANCIAL_UPDATE', {
@@ -235,19 +266,29 @@ export class FinanceService {
   /**
    * Utility to rebuild account balance from ledger ground truth.
    */
-  async rebuildAccountBalance(accountId: string) {
-    const account = await this.prisma.account.findUnique({
+  async rebuildAccountBalance(
+    accountId: string,
+    txClient?: Prisma.TransactionClient,
+  ) {
+    const client = txClient || this.prisma;
+    const account = await client.account.findUnique({
       where: { id: accountId },
       include: { connection: true },
     });
 
     if (!account) throw new NotFoundException('Account not found');
 
-    const transactions = await this.prisma.transaction.findMany({
+    const transactions = await client.transaction.findMany({
       where: {
         OR: [
-          { senderId: account.connection.requesterId, receiverId: account.connection.receiverId },
-          { senderId: account.connection.receiverId, receiverId: account.connection.requesterId },
+          {
+            senderId: account.connection.requesterId,
+            receiverId: account.connection.receiverId,
+          },
+          {
+            senderId: account.connection.receiverId,
+            receiverId: account.connection.requesterId,
+          },
         ],
       },
     });
@@ -256,24 +297,32 @@ export class FinanceService {
     for (const t of transactions) {
       const isSenderRequester = t.senderId === account.connection.requesterId;
       const amount = new Decimal(t.amount as any);
-      
+
       switch (t.transactionType) {
         case 'SALE':
-          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          balance = isSenderRequester
+            ? balance.plus(amount)
+            : balance.minus(amount);
           break;
         case 'PURCHASE':
-          balance = isSenderRequester ? balance.minus(amount) : balance.plus(amount);
+          balance = isSenderRequester
+            ? balance.minus(amount)
+            : balance.plus(amount);
           break;
         case 'PAYMENT':
-          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          balance = isSenderRequester
+            ? balance.plus(amount)
+            : balance.minus(amount);
           break;
         case 'ADJUSTMENT':
-          balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          balance = isSenderRequester
+            ? balance.plus(amount)
+            : balance.minus(amount);
           break;
       }
     }
 
-    return this.prisma.account.update({
+    return client.account.update({
       where: { id: accountId },
       data: {
         balance: balance.toString(),

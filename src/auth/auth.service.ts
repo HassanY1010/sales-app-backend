@@ -17,6 +17,13 @@ import { RegisterDto } from './dto/register.dto';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  private readonly pinAttempts = new Map<
+    string,
+    { count: number; lockedUntil?: Date }
+  >();
+  private readonly MAX_PIN_ATTEMPTS = 5;
+  private readonly LOCKOUT_MINUTES = 15;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -29,6 +36,40 @@ export class AuthService {
     if (trimmed.includes('@')) return trimmed.toLowerCase();
     const digits = trimmed.replace(/\D/g, '');
     return digits.startsWith('0') ? digits.substring(1) : digits;
+  }
+
+  private checkPinLockout(identifier: string): void {
+    const record = this.pinAttempts.get(identifier);
+    if (!record) return;
+    if (record.lockedUntil && record.lockedUntil > new Date()) {
+      const minutesLeft = Math.ceil(
+        (record.lockedUntil.getTime() - Date.now()) / 60000,
+      );
+      throw new UnauthorizedException(
+        `تم تجاوز الحد الأقصى للمحاولات. حاول مجدداً بعد ${minutesLeft} دقيقة.`,
+      );
+    }
+    if (record.lockedUntil && record.lockedUntil <= new Date()) {
+      this.pinAttempts.delete(identifier);
+    }
+  }
+
+  private recordPinFailure(identifier: string): void {
+    const record = this.pinAttempts.get(identifier) ?? { count: 0 };
+    record.count += 1;
+    if (record.count >= this.MAX_PIN_ATTEMPTS) {
+      record.lockedUntil = new Date(
+        Date.now() + this.LOCKOUT_MINUTES * 60 * 1000,
+      );
+      this.logger.warn(
+        `PIN lockout triggered for identifier: ${identifier.substring(0, 4)}***`,
+      );
+    }
+    this.pinAttempts.set(identifier, record);
+  }
+
+  private clearPinFailures(identifier: string): void {
+    this.pinAttempts.delete(identifier);
   }
 
   async register(
@@ -71,9 +112,10 @@ export class AuthService {
           status: 'ACTIVE',
         },
       });
-      if (agent) {
-        referredByAgentId = agent.id;
+      if (!agent) {
+        throw new BadRequestException('كود الإحالة المدخل غير صالح أو غير نشط.');
       }
+      referredByAgentId = agent.id;
     }
 
     const user = await this.prisma.user.create({
@@ -91,7 +133,7 @@ export class AuthService {
             name:
               dto.userType === 'business' ? dto.businessName! : dto.fullName,
             businessType:
-              dto.userType === 'business' ? dto.businessType : 'Individual',
+              dto.userType === 'business' ? dto.businessType : 'مستخدم شخصي',
             phoneNumber: normalizedPhone,
             email: normalizedEmail,
           },
@@ -211,6 +253,7 @@ export class AuthService {
   }
 
   async verifyResetPin(identifier: string, pin: string) {
+    this.checkPinLockout(identifier);
     const user = await this.findUserByIdentifier(identifier);
     if (!user) {
       throw new UnauthorizedException('user_not_found');
@@ -220,12 +263,15 @@ export class AuthService {
     }
     const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
+      this.recordPinFailure(identifier);
       throw new UnauthorizedException('security_pin_invalid');
     }
+    this.clearPinFailures(identifier);
     return { success: true, message: 'تم التحقق بنجاح' };
   }
 
   async resetPassword(identifier: string, newPassword: string, pin: string) {
+    this.checkPinLockout(identifier);
     const user = await this.findUserByIdentifier(identifier);
     if (!user) {
       throw new UnauthorizedException('user_not_found');
@@ -235,8 +281,10 @@ export class AuthService {
     }
     const isPinValid = await bcrypt.compare(pin, user.securityPin);
     if (!isPinValid) {
+      this.recordPinFailure(identifier);
       throw new UnauthorizedException('security_pin_invalid');
     }
+    this.clearPinFailures(identifier);
 
     const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
@@ -264,7 +312,7 @@ export class AuthService {
   async forgotPassword(identifier: string) {
     const user = await this.findUserByIdentifier(identifier);
     if (!user) {
-      throw new UnauthorizedException('user_not_found');
+      throw new UnauthorizedException('غير مسجل');
     }
     return {
       success: true,

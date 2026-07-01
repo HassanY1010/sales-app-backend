@@ -1,13 +1,27 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
-import { AdminUsersQueryDto, ChangeUserRoleDto, ToggleUserStatusDto } from './dto/admin-user.dto';
-import { AdminBusinessesQueryDto, ToggleBusinessStatusDto, BusinessStatsDto } from './dto/admin-business.dto';
+import {
+  AdminUsersQueryDto,
+  ChangeUserRoleDto,
+  ToggleUserStatusDto,
+} from './dto/admin-user.dto';
+import {
+  AdminBusinessesQueryDto,
+  ToggleBusinessStatusDto,
+  BusinessStatsDto,
+} from './dto/admin-business.dto';
 import { AdminOrdersQueryDto } from './dto/admin-order.dto';
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
 import Decimal from 'decimal.js';
 import * as bcrypt from 'bcrypt';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FinanceService } from '../finance/finance.service';
 
 @Injectable()
 export class AdminService {
@@ -16,6 +30,7 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly financeService: FinanceService,
   ) {}
 
   // ==================== Dashboard Stats ====================
@@ -68,9 +83,9 @@ export class AdminService {
     `;
 
     // Ensure numeric types from raw query are converted to strings for JSON safety
-    const formattedMonthlyRevenue = monthlyRevenue.map(row => ({
+    const formattedMonthlyRevenue = monthlyRevenue.map((row) => ({
       month: row.month,
-      total: row.total?.toString() || '0'
+      total: row.total?.toString() || '0',
     }));
 
     return {
@@ -87,7 +102,15 @@ export class AdminService {
 
   // ==================== Users Management ====================
   async getUsers(query: AdminUsersQueryDto, adminId: string) {
-    const { page = 1, limit = 10, search, userType, isActive, sortBy = 'createdAt', sortOrder = 'desc' } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      userType,
+      isActive,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -159,7 +182,9 @@ export class AdminService {
   }
 
   async changeUserRole(dto: ChangeUserRoleDto, adminId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.userId },
+    });
     if (!user) {
       throw new NotFoundException('المستخدم غير موجود');
     }
@@ -178,7 +203,9 @@ export class AdminService {
   }
 
   async toggleUserStatus(dto: ToggleUserStatusDto, adminId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: dto.userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.userId },
+    });
     if (!user) {
       throw new NotFoundException('المستخدم غير موجود');
     }
@@ -188,10 +215,31 @@ export class AdminService {
       data: { isActive: dto.isActive },
     });
 
-    await this.logAdminAction(adminId, 'TOGGLE_USER_STATUS', 'USER', dto.userId, {
-      oldStatus: user.isActive,
-      newStatus: dto.isActive,
-    });
+    await this.logAdminAction(
+      adminId,
+      'TOGGLE_USER_STATUS',
+      'USER',
+      dto.userId,
+      {
+        oldStatus: user.isActive,
+        newStatus: dto.isActive,
+      },
+    );
+
+    if (!dto.isActive) {
+      try {
+        await this.notificationsService.notifyUser(
+          user.id,
+          'تعليق الحساب',
+          'تم تعليق حسابك من قبل الإدارة. يرجى التواصل مع الدعم لمزيد من التفاصيل.',
+          { type: 'ACCOUNT_SUSPENDED' },
+        );
+      } catch (err: any) {
+        this.logger.error(
+          `Failed to send suspension notification to user ${user.id}: ${err.message}`,
+        );
+      }
+    }
 
     return updated;
   }
@@ -215,15 +263,52 @@ export class AdminService {
     });
 
     await this.logAdminAction(adminId, 'RESET_USER_PASSWORD', 'USER', userId, {
-      message: 'Password reset to temporary password and active sessions revoked',
+      message:
+        'Password reset to temporary password and active sessions revoked',
     });
 
     return { success: true, temporaryPassword };
   }
 
+  async deleteUser(userId: string, adminId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { business: true },
+    });
+    if (!user) {
+      throw new NotFoundException('المستخدم غير موجود');
+    }
+
+    // Log BEFORE deletion so record exists
+    await this.logAdminAction(adminId, 'DELETE_USER', 'USER', userId, {
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      userType: user.userType,
+      businessId: user.business?.id,
+    });
+
+    // Revoke all active sessions first
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    // Delete the user (cascade will handle related records per schema)
+    await this.prisma.user.delete({ where: { id: userId } });
+
+    return { success: true, message: 'تم حذف المستخدم بنجاح' };
+  }
+
   // ==================== Businesses Management ====================
   async getBusinesses(query: AdminBusinessesQueryDto) {
-    const { page = 1, limit = 10, search, businessType, sortBy = 'createdAt', sortOrder = 'desc' } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      businessType,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -243,8 +328,22 @@ export class AdminService {
         take: limit,
         orderBy: { [sortBy]: sortOrder },
         include: {
-          user: { select: { id: true, fullName: true, email: true, phoneNumber: true, isActive: true } },
-          _count: { select: { sentConnections: true, receivedConnections: true, sentOrders: true } },
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phoneNumber: true,
+              isActive: true,
+            },
+          },
+          _count: {
+            select: {
+              sentConnections: true,
+              receivedConnections: true,
+              sentOrders: true,
+            },
+          },
         },
       }),
       this.prisma.business.count({ where }),
@@ -276,9 +375,9 @@ export class AdminService {
   }
 
   async toggleBusinessStatus(dto: ToggleBusinessStatusDto, adminId: string) {
-    const business = await this.prisma.business.findUnique({ 
+    const business = await this.prisma.business.findUnique({
       where: { id: dto.businessId },
-      include: { user: true }
+      include: { user: true },
     });
     if (!business) {
       throw new NotFoundException('الشركة غير موجودة');
@@ -290,10 +389,31 @@ export class AdminService {
       include: { user: true },
     });
 
-    await this.logAdminAction(adminId, 'TOGGLE_BUSINESS_STATUS', 'BUSINESS', dto.businessId, {
-      oldStatus: business.user.isActive,
-      newStatus: dto.isActive,
-    });
+    await this.logAdminAction(
+      adminId,
+      'TOGGLE_BUSINESS_STATUS',
+      'BUSINESS',
+      dto.businessId,
+      {
+        oldStatus: business.user.isActive,
+        newStatus: dto.isActive,
+      },
+    );
+
+    if (!dto.isActive && business.user) {
+      try {
+        await this.notificationsService.notifyUser(
+          business.user.id,
+          'تعليق الحساب',
+          'تم تعليق حساب منشأتك من قبل الإدارة. يرجى التواصل مع الدعم لمزيد من التفاصيل.',
+          { type: 'ACCOUNT_SUSPENDED' },
+        );
+      } catch (err: any) {
+        this.logger.error(
+          `Failed to send suspension notification to user ${business.user.id}: ${err.message}`,
+        );
+      }
+    }
 
     return updated;
   }
@@ -302,7 +422,8 @@ export class AdminService {
     const { businessId, startDate, endDate } = dto;
 
     const where: any = {};
-    if (businessId) where.OR = [{ senderId: businessId }, { receiverId: businessId }];
+    if (businessId)
+      where.OR = [{ senderId: businessId }, { receiverId: businessId }];
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) where.createdAt.gte = new Date(startDate);
@@ -325,11 +446,11 @@ export class AdminService {
     ]);
 
     const totalSales = orders
-      .filter(o => o.senderId === businessId)
+      .filter((o) => o.senderId === businessId)
       .reduce((sum, o) => sum.plus(o.total), new Decimal(0));
-    
+
     const totalPurchases = orders
-      .filter(o => o.receiverId === businessId)
+      .filter((o) => o.receiverId === businessId)
       .reduce((sum, o) => sum.plus(o.total), new Decimal(0));
 
     return {
@@ -343,7 +464,19 @@ export class AdminService {
 
   // ==================== Orders Management ====================
   async getOrders(query: AdminOrdersQueryDto) {
-    const { page = 1, limit = 10, search, status, isCash, startDate, endDate, minAmount, maxAmount, sortBy = 'createdAt', sortOrder = 'desc' } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      status,
+      isCash,
+      startDate,
+      endDate,
+      minAmount,
+      maxAmount,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -405,7 +538,18 @@ export class AdminService {
 
   // ==================== Transactions Management ====================
   async getTransactions(query: AdminTransactionsQueryDto) {
-    const { page = 1, limit = 10, search, transactionType, startDate, endDate, minAmount, maxAmount, sortBy = 'createdAt', sortOrder = 'desc' } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      transactionType,
+      startDate,
+      endDate,
+      minAmount,
+      maxAmount,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -447,7 +591,9 @@ export class AdminService {
   }
 
   // ==================== Connections Management ====================
-  async getConnections(query: PaginationDto & { status?: string; connectionType?: string }) {
+  async getConnections(
+    query: PaginationDto & { status?: string; connectionType?: string },
+  ) {
     const { page = 1, limit = 10, status, connectionType } = query;
     const skip = (page - 1) * limit;
 
@@ -550,8 +696,20 @@ export class AdminService {
         include: {
           connection: {
             include: {
-              requester: { select: { id: true, name: true, user: { select: { id: true, fullName: true } } } },
-              receiver: { select: { id: true, name: true, user: { select: { id: true, fullName: true } } } },
+              requester: {
+                select: {
+                  id: true,
+                  name: true,
+                  user: { select: { id: true, fullName: true } },
+                },
+              },
+              receiver: {
+                select: {
+                  id: true,
+                  name: true,
+                  user: { select: { id: true, fullName: true } },
+                },
+              },
             },
           },
         },
@@ -578,7 +736,9 @@ export class AdminService {
     };
   }
 
-  async getAdjustmentRequests(query: PaginationDto & { status?: string; targetType?: string }) {
+  async getAdjustmentRequests(
+    query: PaginationDto & { status?: string; targetType?: string },
+  ) {
     const { page = 1, limit = 10, status, targetType } = query;
     const skip = (page - 1) * limit;
     const where: any = {};
@@ -607,17 +767,25 @@ export class AdminService {
     };
   }
 
-  async rejectAdjustmentRequest(id: string, rejectionReason: string, adminId: string) {
+  async rejectAdjustmentRequest(
+    id: string,
+    rejectionReason: string,
+    adminId: string,
+  ) {
     if (!rejectionReason || rejectionReason.trim().length < 5) {
       throw new BadRequestException('Rejection reason is required');
     }
 
-    const request = await this.prisma.adjustmentRequest.findUnique({ where: { id } });
+    const request = await this.prisma.adjustmentRequest.findUnique({
+      where: { id },
+    });
     if (!request) {
       throw new NotFoundException('Adjustment request not found');
     }
     if (request.status !== 'PENDING') {
-      throw new BadRequestException(`Adjustment request is already ${request.status}`);
+      throw new BadRequestException(
+        `Adjustment request is already ${request.status}`,
+      );
     }
 
     const rejected = await this.prisma.adjustmentRequest.update({
@@ -630,17 +798,179 @@ export class AdminService {
       },
     });
 
-    await this.logAdminAction(adminId, 'REJECT_ADJUSTMENT_REQUEST', 'ADJUSTMENT_REQUEST', id, {
-      targetType: request.targetType,
-      targetId: request.targetId,
-      rejectionReason: rejectionReason.trim(),
-    });
+    await this.logAdminAction(
+      adminId,
+      'REJECT_ADJUSTMENT_REQUEST',
+      'ADJUSTMENT_REQUEST',
+      id,
+      {
+        targetType: request.targetType,
+        targetId: request.targetId,
+        rejectionReason: rejectionReason.trim(),
+      },
+    );
 
     return rejected;
   }
 
+  /**
+   * Admin-level force-approve of an adjustment request.
+   * Bypasses the receiverBusinessId check that restricts the business-level service.
+   * Updates the target record amount, records a ledger ADJUSTMENT, and rebuilds balance.
+   * (Blocker-02)
+   */
+  async adminApproveAdjustmentRequest(id: string, adminId: string) {
+    const request = await this.prisma.adjustmentRequest.findUnique({
+      where: { id },
+    });
+    if (!request) throw new NotFoundException('Adjustment request not found');
+    if (request.status !== 'PENDING') {
+      throw new BadRequestException(
+        `Adjustment request is already ${request.status}`,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Non-amount metadata updates
+      if (request.requestedDueDate || request.requestedNote) {
+        if (request.targetType === 'ORDER') {
+          await tx.order.update({
+            where: { id: request.targetId },
+            data: {
+              dueDate: request.requestedDueDate ?? undefined,
+              notes: request.requestedNote ?? undefined,
+            },
+          });
+        } else {
+          await tx.transaction.update({
+            where: { id: request.targetId },
+            data: {
+              dueDate: request.requestedDueDate ?? undefined,
+              note: request.requestedNote ?? undefined,
+            },
+          });
+        }
+      }
+
+      // 2. Amount change
+      if (request.requestedAmount) {
+        const requestedAmount = new Decimal(request.requestedAmount as any);
+
+        if (request.targetType === 'ORDER') {
+          const order = await tx.order.findUnique({
+            where: { id: request.targetId },
+          });
+          if (!order) throw new NotFoundException('Target order not found');
+
+          // Update order total
+          await tx.order.update({
+            where: { id: request.targetId },
+            data: { total: requestedAmount.toString() },
+          });
+
+          // Update linked SALE transaction
+          const linkedTx = await tx.transaction.findFirst({
+            where: { orderId: request.targetId, transactionType: 'SALE' },
+          });
+          if (linkedTx) {
+            await tx.transaction.update({
+              where: { id: linkedTx.id },
+              data: { amount: requestedAmount.toString() },
+            });
+          }
+
+          // Rebuild account balance for these two parties
+          const connection = await tx.connection.findFirst({
+            where: {
+              OR: [
+                { requesterId: order.senderId, receiverId: order.receiverId },
+                { requesterId: order.receiverId, receiverId: order.senderId },
+              ],
+              status: 'ACCEPTED',
+            },
+            include: { account: true },
+          });
+
+          if (connection?.account) {
+            await this.financeService.rebuildAccountBalance(
+              connection.account.id,
+              tx,
+            );
+          }
+        } else {
+          const transaction = await tx.transaction.findUnique({
+            where: { id: request.targetId },
+          });
+          if (!transaction)
+            throw new NotFoundException('Target transaction not found');
+
+          await tx.transaction.update({
+            where: { id: request.targetId },
+            data: { amount: requestedAmount.toString() },
+          });
+
+          const connection = await tx.connection.findFirst({
+            where: {
+              OR: [
+                {
+                  requesterId: transaction.senderId,
+                  receiverId: transaction.receiverId,
+                },
+                {
+                  requesterId: transaction.receiverId,
+                  receiverId: transaction.senderId,
+                },
+              ],
+              status: 'ACCEPTED',
+            },
+            include: { account: true },
+          });
+
+          if (connection?.account) {
+            await this.financeService.rebuildAccountBalance(
+              connection.account.id,
+              tx,
+            );
+          }
+        }
+      }
+
+      // 3. Mark as approved
+      const approved = await tx.adjustmentRequest.update({
+        where: { id },
+        data: {
+          status: 'APPROVED',
+          reviewedById: adminId,
+          reviewedAt: new Date(),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: adminId,
+          action: 'ADMIN_APPROVE',
+          resource: 'ADJUSTMENT_REQUEST',
+          resourceId: id,
+          details: {
+            targetType: request.targetType,
+            targetId: request.targetId,
+            requestedAmount: request.requestedAmount?.toString(),
+          },
+        },
+      });
+
+      return approved;
+    });
+  }
+
   // ==================== Expenses ====================
-  async getExpenses(query: PaginationDto & { userId?: string; startDate?: string; endDate?: string }) {
+  async getExpenses(
+    query: PaginationDto & {
+      userId?: string;
+      startDate?: string;
+      endDate?: string;
+    },
+  ) {
     const { page = 1, limit = 10, userId, startDate, endDate } = query;
     const skip = (page - 1) * limit;
 
@@ -672,7 +1002,13 @@ export class AdminService {
   }
 
   // ==================== Notifications ====================
-  async sendNotification(adminId: string, userId: string, title: string, body: string, type?: string) {
+  async sendNotification(
+    adminId: string,
+    userId: string,
+    title: string,
+    body: string,
+    type?: string,
+  ) {
     const notification = await this.notificationsService.notifyUser(
       userId,
       title,
@@ -680,34 +1016,52 @@ export class AdminService {
       { type: type || 'ADMIN_MESSAGE', senderId: adminId },
     );
 
-    await this.logAdminAction(adminId, 'SEND_NOTIFICATION', 'NOTIFICATION', notification.id, { userId, title, body, type });
+    await this.logAdminAction(
+      adminId,
+      'SEND_NOTIFICATION',
+      'NOTIFICATION',
+      notification.id,
+      { userId, title, body, type },
+    );
 
     return notification;
   }
 
-  async sendBulkNotification(adminId: string, userIds: string[], title: string, body: string, type?: string) {
+  async sendBulkNotification(
+    adminId: string,
+    userIds: string[],
+    title: string,
+    body: string,
+    type?: string,
+  ) {
     const notifications = await Promise.all(
       userIds.map((userId) =>
-        this.notificationsService.notifyUser(
-          userId,
-          title,
-          body,
-          { type: type || 'ADMIN_MESSAGE', senderId: adminId },
-        ),
+        this.notificationsService.notifyUser(userId, title, body, {
+          type: type || 'ADMIN_MESSAGE',
+          senderId: adminId,
+        }),
       ),
     );
 
-    await this.logAdminAction(adminId, 'SEND_BULK_NOTIFICATION', 'NOTIFICATION', null, {
-      userCount: userIds.length,
-      title,
-      body,
-      type,
-    });
+    await this.logAdminAction(
+      adminId,
+      'SEND_BULK_NOTIFICATION',
+      'NOTIFICATION',
+      null,
+      {
+        userCount: userIds.length,
+        title,
+        body,
+        type,
+      },
+    );
 
     return notifications;
   }
 
-  async getNotifications(query: PaginationDto & { userId?: string; isRead?: boolean }) {
+  async getNotifications(
+    query: PaginationDto & { userId?: string; isRead?: boolean },
+  ) {
     const { page = 1, limit = 10, userId, isRead } = query;
     const skip = (page - 1) * limit;
 
@@ -768,10 +1122,10 @@ export class AdminService {
               phoneNumber: true,
               userType: true,
               business: {
-                select: { name: true }
-              }
-            }
-          }
+                select: { name: true },
+              },
+            },
+          },
         },
       }),
       this.prisma.suggestion.count({ where }),
@@ -787,10 +1141,14 @@ export class AdminService {
     // FIX BUG-03: Validate status against allowed values before persisting
     const VALID_STATUSES = ['OPEN', 'REVIEWED', 'CLOSED'];
     if (!VALID_STATUSES.includes(status)) {
-      throw new BadRequestException(`حالة غير صالحة. القيم المسموح بها: ${VALID_STATUSES.join(', ')}`);
+      throw new BadRequestException(
+        `حالة غير صالحة. القيم المسموح بها: ${VALID_STATUSES.join(', ')}`,
+      );
     }
 
-    const suggestion = await this.prisma.suggestion.findUnique({ where: { id: suggestionId } });
+    const suggestion = await this.prisma.suggestion.findUnique({
+      where: { id: suggestionId },
+    });
     if (!suggestion) {
       throw new NotFoundException('الاقتراح غير موجود');
     }
@@ -802,7 +1160,13 @@ export class AdminService {
   }
 
   // ==================== Audit Logs ====================
-  async getAuditLogs(query: PaginationDto & { userId?: string; action?: string; resource?: string }) {
+  async getAuditLogs(
+    query: PaginationDto & {
+      userId?: string;
+      action?: string;
+      resource?: string;
+    },
+  ) {
     const { page = 1, limit = 10, userId, action, resource } = query;
     const skip = (page - 1) * limit;
 
@@ -856,10 +1220,16 @@ export class AdminService {
       }),
     ]);
 
-    const totalRevenue = new Decimal(transactionSum._sum.amount?.toString() || '0');
+    const totalRevenue = new Decimal(
+      transactionSum._sum.amount?.toString() || '0',
+    );
     const totalOrderValue = new Decimal(orderSum._sum.total?.toString() || '0');
-    const totalReceivable = new Decimal(accountSums._sum.totalDebit?.toString() || '0');
-    const totalPayable = new Decimal(accountSums._sum.totalCredit?.toString() || '0');
+    const totalReceivable = new Decimal(
+      accountSums._sum.totalDebit?.toString() || '0',
+    );
+    const totalPayable = new Decimal(
+      accountSums._sum.totalCredit?.toString() || '0',
+    );
 
     return {
       totalRevenue: totalRevenue.toString(),
@@ -877,7 +1247,11 @@ export class AdminService {
     return this.prisma.systemSettings.findMany();
   }
 
-  async updateSystemSetting(key: string, value: any, isPublic: boolean = false) {
+  async updateSystemSetting(
+    key: string,
+    value: any,
+    isPublic: boolean = false,
+  ) {
     return this.prisma.systemSettings.upsert({
       where: { key },
       create: { key, value, isPublic },
@@ -908,7 +1282,9 @@ export class AdminService {
       this.prisma.auditLog.findMany({
         take: 20,
         orderBy: { createdAt: 'desc' },
-        include: { user: { select: { id: true, fullName: true, email: true } } },
+        include: {
+          user: { select: { id: true, fullName: true, email: true } },
+        },
       }),
       this.prisma.refreshToken.count(),
       this.prisma.refreshToken.count({
@@ -923,8 +1299,12 @@ export class AdminService {
         database: 'connected',
       },
       security: {
-        corsConfigured: Boolean(process.env.CORS_ORIGINS || process.env.CORS_ORIGIN),
-        jwtSecretConfigured: Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32),
+        corsConfigured: Boolean(
+          process.env.CORS_ORIGINS || process.env.CORS_ORIGIN,
+        ),
+        jwtSecretConfigured: Boolean(
+          process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32,
+        ),
         refreshTokensEnabled: true,
         activeSessions: activeRefreshTokenCount,
         totalRefreshTokens: refreshTokenCount,

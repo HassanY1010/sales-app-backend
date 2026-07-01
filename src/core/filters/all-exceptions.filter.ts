@@ -27,7 +27,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
-      
+
       if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
         message = (exceptionResponse as any).message || exceptionResponse;
       } else {
@@ -38,7 +38,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (status >= 500) {
-      const error = exception instanceof Error ? exception : new Error(String(exception));
+      const error =
+        exception instanceof Error ? exception : new Error(String(exception));
       this.logger.error(
         `[${correlationId}] ${request.method} ${request.url} failed: ${error.message}`,
         error.stack,

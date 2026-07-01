@@ -24,14 +24,21 @@ import {
   ToggleBusinessStatusDto,
   BusinessStatsDto,
 } from './dto/admin-business.dto';
-import { AdminOrdersQueryDto, UpdateOrderStatusDto } from './dto/admin-order.dto';
+import {
+  AdminOrdersQueryDto,
+  UpdateOrderStatusDto,
+} from './dto/admin-order.dto';
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import { AdjustmentRequestsService } from '../adjustment-requests/adjustment-requests.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly adjustmentRequestsService: AdjustmentRequestsService,
+  ) {}
 
   // ==================== Dashboard ====================
   @Get('dashboard/stats')
@@ -77,6 +84,12 @@ export class AdminController {
     return this.adminService.resetUserPassword(id, req.user.userId);
   }
 
+  @Delete('users/:id')
+  @Roles('SUPER_ADMIN')
+  deleteUser(@Param('id') id: string, @Request() req: any) {
+    return this.adminService.deleteUser(id, req.user.userId);
+  }
+
   // ==================== Businesses ====================
   @Get('businesses')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
@@ -92,7 +105,10 @@ export class AdminController {
 
   @Put('businesses/toggle-status')
   @Roles('SUPER_ADMIN', 'ADMIN')
-  toggleBusinessStatus(@Body() dto: ToggleBusinessStatusDto, @Request() req: any) {
+  toggleBusinessStatus(
+    @Body() dto: ToggleBusinessStatusDto,
+    @Request() req: any,
+  ) {
     return this.adminService.toggleBusinessStatus(dto, req.user.userId);
   }
 
@@ -125,7 +141,10 @@ export class AdminController {
   // ==================== Connections ====================
   @Get('connections')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getConnections(@Query() query: PaginationDto & { status?: string; connectionType?: string }) {
+  getConnections(
+    @Query()
+    query: PaginationDto & { status?: string; connectionType?: string },
+  ) {
     return this.adminService.getConnections(query);
   }
 
@@ -151,7 +170,9 @@ export class AdminController {
   // ==================== Adjustment Requests ====================
   @Get('adjustment-requests')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getAdjustmentRequests(@Query() query: PaginationDto & { status?: string; targetType?: string }) {
+  getAdjustmentRequests(
+    @Query() query: PaginationDto & { status?: string; targetType?: string },
+  ) {
     return this.adminService.getAdjustmentRequests(query);
   }
 
@@ -162,27 +183,51 @@ export class AdminController {
     @Body('rejectionReason') rejectionReason: string,
     @Request() req: any,
   ) {
-    return this.adminService.rejectAdjustmentRequest(id, rejectionReason, req.user.userId);
+    return this.adminService.rejectAdjustmentRequest(
+      id,
+      rejectionReason,
+      req.user.userId,
+    );
+  }
+
+  /** Admin force-approve an adjustment request (Blocker-02) */
+  @Put('adjustment-requests/:id/approve')
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  approveAdjustmentRequest(@Param('id') id: string, @Request() req: any) {
+    // Admin acts as the receiverBusinessId party — delegate to the business-level service
+    // but bypass the receiverBusinessId ownership check by using a special admin override.
+    return this.adminService.adminApproveAdjustmentRequest(id, req.user.userId);
   }
 
   // ==================== Expenses ====================
   @Get('expenses')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getExpenses(@Query() query: PaginationDto & { userId?: string; startDate?: string; endDate?: string }) {
+  getExpenses(
+    @Query()
+    query: PaginationDto & {
+      userId?: string;
+      startDate?: string;
+      endDate?: string;
+    },
+  ) {
     return this.adminService.getExpenses(query);
   }
 
   // ==================== Notifications ====================
   @Get('notifications')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getNotifications(@Query() query: PaginationDto & { userId?: string; isRead?: boolean }) {
+  getNotifications(
+    @Query() query: PaginationDto & { userId?: string; isRead?: boolean },
+  ) {
     return this.adminService.getNotifications(query);
   }
 
   @Get('notifications/count')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
   getNotificationsCount(@Query('isRead') isRead?: string) {
-    return this.adminService.getNotificationsCount(isRead === 'true' ? true : isRead === 'false' ? false : undefined);
+    return this.adminService.getNotificationsCount(
+      isRead === 'true' ? true : isRead === 'false' ? false : undefined,
+    );
   }
 
   @Post('notifications/send')
@@ -191,16 +236,29 @@ export class AdminController {
     @Body() dto: { userId: string; title: string; body: string; type?: string },
     @Request() req: any,
   ) {
-    return this.adminService.sendNotification(req.user.userId, dto.userId, dto.title, dto.body, dto.type);
+    return this.adminService.sendNotification(
+      req.user.userId,
+      dto.userId,
+      dto.title,
+      dto.body,
+      dto.type,
+    );
   }
 
   @Post('notifications/send-bulk')
   @Roles('SUPER_ADMIN', 'ADMIN')
   sendBulkNotification(
-    @Body() dto: { userIds: string[]; title: string; body: string; type?: string },
+    @Body()
+    dto: { userIds: string[]; title: string; body: string; type?: string },
     @Request() req: any,
   ) {
-    return this.adminService.sendBulkNotification(req.user.userId, dto.userIds, dto.title, dto.body, dto.type);
+    return this.adminService.sendBulkNotification(
+      req.user.userId,
+      dto.userIds,
+      dto.title,
+      dto.body,
+      dto.type,
+    );
   }
 
   @Put('notifications/:id/read')
@@ -213,7 +271,12 @@ export class AdminController {
   @Get('audit-logs')
   @Roles('SUPER_ADMIN', 'ADMIN')
   getAuditLogs(
-    @Query() query: PaginationDto & { userId?: string; action?: string; resource?: string },
+    @Query()
+    query: PaginationDto & {
+      userId?: string;
+      action?: string;
+      resource?: string;
+    },
   ) {
     return this.adminService.getAuditLogs(query);
   }
@@ -253,6 +316,10 @@ export class AdminController {
   updateSystemSetting(
     @Body() dto: { key: string; value: any; isPublic?: boolean },
   ) {
-    return this.adminService.updateSystemSetting(dto.key, dto.value, dto.isPublic);
+    return this.adminService.updateSystemSetting(
+      dto.key,
+      dto.value,
+      dto.isPublic,
+    );
   }
 }

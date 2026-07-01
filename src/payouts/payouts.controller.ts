@@ -1,4 +1,13 @@
-import { Controller, Post, Get, Body, Param, Query, UseGuards, ForbiddenException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PayoutsService } from './payouts.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -16,7 +25,7 @@ export class PayoutsController {
   async createPayout(
     @Body('agentId') agentId: string,
     @Body('notes') notes?: string,
-    @Body('receiptUrl') receiptUrl?: string
+    @Body('receiptUrl') receiptUrl?: string,
   ) {
     return this.payoutsService.createPayout(agentId, notes, receiptUrl);
   }
@@ -28,7 +37,10 @@ export class PayoutsController {
   }
 
   @Get('agent/:agentId')
-  async findByAgentId(@Param('agentId') agentId: string, @CurrentUser() user: any) {
+  async findByAgentId(
+    @Param('agentId') agentId: string,
+    @CurrentUser() user: any,
+  ) {
     const isOwnerOrAdmin = await this.checkIsOwnerOrAdmin(user, agentId);
     if (!isOwnerOrAdmin) {
       throw new ForbiddenException('غير مصرح لك بعرض مدفوعات هذا المندوب.');
@@ -46,7 +58,10 @@ export class PayoutsController {
     return payout;
   }
 
-  private async checkIsOwnerOrAdmin(user: any, agentId: string): Promise<boolean> {
+  private async checkIsOwnerOrAdmin(
+    user: any,
+    agentId: string,
+  ): Promise<boolean> {
     if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.ADMIN) {
       return true;
     }

@@ -25,7 +25,9 @@ export class NotificationsService {
 
   private initializeFirebase() {
     const projectId = this.configService.get<string>('FCM_PROJECT_ID');
-    const privateKey = this.configService.get<string>('FCM_PRIVATE_KEY')?.replace(/\\n/g, '\n');
+    const privateKey = this.configService
+      .get<string>('FCM_PRIVATE_KEY')
+      ?.replace(/\\n/g, '\n');
     const clientEmail = this.configService.get<string>('FCM_CLIENT_EMAIL');
 
     if (
@@ -35,33 +37,50 @@ export class NotificationsService {
       privateKey.includes('BEGIN PRIVATE KEY') &&
       clientEmail
     ) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId,
-          privateKey,
-          clientEmail,
-        }),
-      });
-      this.isFirebaseInitialized = true;
-      this.logger.log('Firebase Admin Initialized Successfully');
+      try {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId,
+            privateKey,
+            clientEmail,
+          }),
+        });
+        this.isFirebaseInitialized = true;
+        this.logger.log('Firebase Admin Initialized Successfully');
+      } catch (err: any) {
+        this.isFirebaseInitialized = false;
+        this.logger.warn(
+          `Firebase Admin initialization failed (FCM push notifications disabled): ${err.message}`,
+        );
+      }
     } else {
       this.isFirebaseInitialized = admin.apps.length > 0;
       if (!this.isFirebaseInitialized) {
-        this.logger.warn('Firebase Admin credentials not configured. Database and socket notifications remain active.');
+        this.logger.warn(
+          'Firebase Admin credentials not configured. Database and socket notifications remain active.',
+        );
       }
     }
   }
 
   private toFcmData(data?: NotificationPayload): Record<string, string> {
     if (!data) return {};
-    return Object.entries(data).reduce<Record<string, string>>((acc, [key, value]) => {
-      if (value === undefined || value === null) return acc;
-      acc[key] = typeof value === 'string' ? value : JSON.stringify(value);
-      return acc;
-    }, {});
+    return Object.entries(data).reduce<Record<string, string>>(
+      (acc, [key, value]) => {
+        if (value === undefined || value === null) return acc;
+        acc[key] = typeof value === 'string' ? value : JSON.stringify(value);
+        return acc;
+      },
+      {},
+    );
   }
 
-  private async sendFcm(userId: string, title: string, body: string, data?: NotificationPayload) {
+  private async sendFcm(
+    userId: string,
+    title: string,
+    body: string,
+    data?: NotificationPayload,
+  ) {
     if (!this.isFirebaseInitialized) return;
 
     const user = await this.prisma.user.findUnique({
@@ -137,18 +156,19 @@ export class NotificationsService {
     return this.notifyUser(business.userId, title, body, data);
   }
 
-  async notifyAdmins(
-    title: string,
-    body: string,
-    data?: NotificationPayload,
-  ) {
+  async notifyAdmins(title: string, body: string, data?: NotificationPayload) {
     const admins = await this.prisma.user.findMany({
-      where: { role: { in: ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'] }, isActive: true },
+      where: {
+        role: { in: ['SUPER_ADMIN', 'ADMIN', 'SUPPORT'] },
+        isActive: true,
+      },
       select: { id: true },
     });
 
     const notifications = await Promise.all(
-      admins.map((adminUser) => this.notifyUser(adminUser.id, title, body, data)),
+      admins.map((adminUser) =>
+        this.notifyUser(adminUser.id, title, body, data),
+      ),
     );
 
     this.eventsGateway.emitToAllAdmins('notification:new', {

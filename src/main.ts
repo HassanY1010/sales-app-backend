@@ -23,7 +23,9 @@ function resolveCorsOrigins() {
     throw new Error('CORS_ORIGINS must be configured in production');
   }
 
-  return origins.length > 0 ? origins : ['http://localhost:5173', 'http://localhost:3000'];
+  return origins.length > 0
+    ? origins
+    : ['http://localhost:5173', 'http://localhost:3000'];
 }
 
 async function bootstrap() {
@@ -33,7 +35,9 @@ async function bootstrap() {
         format: winston.format.combine(
           winston.format.timestamp(),
           winston.format.ms(),
-          nestWinstonModuleUtilities.format.nestLike('BusinessApp', { colors: true }),
+          nestWinstonModuleUtilities.format.nestLike('BusinessApp', {
+            colors: true,
+          }),
         ),
       }),
       new winston.transports.File({
@@ -59,7 +63,9 @@ async function bootstrap() {
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
   app.use((req: Request, res: Response, next: NextFunction) => {
     const unsafeMethod = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-    const hasAuthCookie = typeof req.headers.cookie === 'string' && req.headers.cookie.includes('access_token=');
+    const hasAuthCookie =
+      typeof req.headers.cookie === 'string' &&
+      req.headers.cookie.includes('access_token=');
     const csrfHeader = req.headers['x-csrf-protection'];
 
     if (unsafeMethod && hasAuthCookie && csrfHeader !== '1') {
@@ -95,7 +101,10 @@ async function bootstrap() {
   // Enable Strict CORS
   const allowedOrigins = resolveCorsOrigins();
   app.enableCors({
-    origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+    origin: (
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) => {
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -103,7 +112,8 @@ async function bootstrap() {
     },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    allowedHeaders: 'Content-Type,Accept,Authorization,x-idempotency-key,x-csrf-protection',
+    allowedHeaders:
+      'Content-Type,Accept,Authorization,x-idempotency-key,x-csrf-protection',
   });
 
   const port = process.env.PORT || 3000;

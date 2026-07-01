@@ -1,10 +1,12 @@
 import {
   Injectable,
   NotFoundException,
-  BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
+import { UpdateTransactionDto } from './dto/update-transaction.dto';
+import { GetTransactionsDto } from './dto/get-transactions.dto';
 import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import Decimal from 'decimal.js';
@@ -40,15 +42,40 @@ export class TransactionsService {
         },
       );
 
+      // Persist payment-method metadata if provided
+      if (dto['paymentMethod'] || dto['transferNumber']) {
+        await tx.transaction.update({
+          where: { id: transaction.id },
+          data: {
+            paymentMethod: (dto as any).paymentMethod ?? undefined,
+            transferNumber: (dto as any).transferNumber ?? undefined,
+          },
+        });
+      }
+
       return transaction;
     });
   }
 
-  async getTransactions(businessId: string, pagination: PaginationDto) {
-    const { page = 1, limit = 10 } = pagination;
-    const where = {
+  async getTransactions(businessId: string, query: GetTransactionsDto) {
+    const { page = 1, limit = 10, relatedBusinessId, type } = query;
+
+    const where: any = {
       OR: [{ senderId: businessId }, { receiverId: businessId }],
     };
+
+    // Filter: only transactions with a specific counterparty
+    if (relatedBusinessId) {
+      where.OR = [
+        { senderId: businessId, receiverId: relatedBusinessId },
+        { senderId: relatedBusinessId, receiverId: businessId },
+      ];
+    }
+
+    // Filter: by transaction type (skip if 'all')
+    if (type && type !== 'all') {
+      where.transactionType = type;
+    }
 
     const [data, total] = await Promise.all([
       this.prisma.transaction.findMany({
@@ -71,10 +98,14 @@ export class TransactionsService {
       data: data.map((transaction) => ({
         ...transaction,
         direction: transaction.receiverId === businessId ? 'credit' : 'debit',
-        relatedUserId: transaction.senderId === businessId ? transaction.receiverId : transaction.senderId,
-        relatedUserName: transaction.senderId === businessId
-          ? transaction.receiver.name
-          : transaction.sender.name,
+        relatedUserId:
+          transaction.senderId === businessId
+            ? transaction.receiverId
+            : transaction.senderId,
+        relatedUserName:
+          transaction.senderId === businessId
+            ? transaction.receiver.name
+            : transaction.sender.name,
       })),
       meta: {
         total,
@@ -83,6 +114,166 @@ export class TransactionsService {
         limit,
       },
     };
+  }
+
+  async updateTransaction(
+    businessId: string,
+    userId: string,
+    id: string,
+    dto: UpdateTransactionDto,
+  ) {
+    // 1. Find the transaction and verify ownership
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id },
+    });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+
+    if (
+      transaction.senderId !== businessId &&
+      transaction.receiverId !== businessId
+    ) {
+      throw new ForbiddenException(
+        'You do not have access to this transaction',
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 2. Compute new amount if provided
+      const newAmount = dto.amount
+        ? new Decimal(dto.amount)
+        : new Decimal(transaction.amount as any);
+
+      // 3. Update the transaction record
+      const updated = await tx.transaction.update({
+        where: { id },
+        data: {
+          amount: newAmount.toString(),
+          note: dto.note ?? transaction.note,
+          voucherNumber: dto.voucherNumber ?? transaction.voucherNumber,
+          currency: dto.currency ?? transaction.currency,
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : transaction.dueDate,
+          attachmentUrl: dto.attachmentUrl ?? transaction.attachmentUrl,
+          paymentMethod:
+            dto.paymentMethod ?? (transaction as any).paymentMethod,
+          transferNumber:
+            dto.transferNumber ?? (transaction as any).transferNumber,
+        },
+      });
+
+      // 4. If amount changed, rebuild the account balance from the ledger
+      if (dto.amount) {
+        // Find the account associated with these two parties
+        const connection = await tx.connection.findFirst({
+          where: {
+            OR: [
+              {
+                requesterId: transaction.senderId,
+                receiverId: transaction.receiverId,
+              },
+              {
+                requesterId: transaction.receiverId,
+                receiverId: transaction.senderId,
+              },
+            ],
+            status: 'ACCEPTED',
+          },
+          include: { account: true },
+        });
+
+        if (connection?.account) {
+          await this.financeService.rebuildAccountBalance(
+            connection.account.id,
+            tx,
+          );
+        }
+      }
+
+      // 5. Audit log
+      await tx.auditLog.create({
+        data: {
+          userId,
+          businessId,
+          action: 'UPDATE',
+          resource: 'TRANSACTION',
+          resourceId: id,
+          details: {
+            previousAmount: transaction.amount?.toString(),
+            newAmount: newAmount.toString(),
+            voucherNumber: updated.voucherNumber,
+          },
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  async deleteTransaction(businessId: string, userId: string, id: string) {
+    // 1. Find the transaction and verify ownership
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id },
+    });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+
+    if (
+      transaction.senderId !== businessId &&
+      transaction.receiverId !== businessId
+    ) {
+      throw new ForbiddenException(
+        'You do not have access to this transaction',
+      );
+    }
+
+    // 2. Find the related account before deleting
+    const connection = await this.prisma.connection.findFirst({
+      where: {
+        OR: [
+          {
+            requesterId: transaction.senderId,
+            receiverId: transaction.receiverId,
+          },
+          {
+            requesterId: transaction.receiverId,
+            receiverId: transaction.senderId,
+          },
+        ],
+        status: 'ACCEPTED',
+      },
+      include: { account: true },
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      // 3. Audit log BEFORE delete (so we have the data)
+      await tx.auditLog.create({
+        data: {
+          userId,
+          businessId,
+          action: 'DELETE',
+          resource: 'TRANSACTION',
+          resourceId: id,
+          details: {
+            transactionType: transaction.transactionType,
+            amount: transaction.amount?.toString(),
+            voucherNumber: transaction.voucherNumber,
+            senderId: transaction.senderId,
+            receiverId: transaction.receiverId,
+          },
+        },
+      });
+
+      // 4. Delete the transaction record
+      await tx.transaction.delete({ where: { id } });
+
+      // 5. Rebuild balance from ledger ground truth
+      if (connection?.account) {
+        await this.financeService.rebuildAccountBalance(
+          connection.account.id,
+          tx,
+        );
+      }
+
+      return { success: true, message: 'Transaction deleted successfully' };
+    });
   }
 
   async getTransactionsSummary(businessId: string) {
@@ -106,9 +297,12 @@ export class TransactionsService {
     for (const transaction of transactions) {
       const amount = new Decimal(transaction.amount as any);
       if (transaction.senderId === businessId) sent = sent.plus(amount);
-      if (transaction.receiverId === businessId) received = received.plus(amount);
-      if (transaction.transactionType === 'PAYMENT') payments = payments.plus(amount);
-      if (['SALE', 'PURCHASE'].includes(transaction.transactionType)) sales = sales.plus(amount);
+      if (transaction.receiverId === businessId)
+        received = received.plus(amount);
+      if (transaction.transactionType === 'PAYMENT')
+        payments = payments.plus(amount);
+      if (['SALE', 'PURCHASE'].includes(transaction.transactionType))
+        sales = sales.plus(amount);
     }
 
     return {

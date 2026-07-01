@@ -1,25 +1,9 @@
-import {
-  IsEnum,
-  IsNotEmpty,
-  IsNumberString,
-  IsOptional,
-  IsString,
-} from 'class-validator';
+import { IsEnum, IsNumberString, IsOptional, IsString } from 'class-validator';
 
-export class CreateTransactionDto {
-  @IsEnum(['PAYMENT', 'SALE', 'PURCHASE', 'ADJUSTMENT'])
-  transactionType: 'PAYMENT' | 'SALE' | 'PURCHASE' | 'ADJUSTMENT';
-
+export class UpdateTransactionDto {
   @IsNumberString()
-  amount: string;
-
-  @IsString()
-  @IsNotEmpty()
-  receiverId: string;
-
-  @IsString()
   @IsOptional()
-  orderId?: string;
+  amount?: string;
 
   @IsString()
   @IsOptional()
@@ -40,10 +24,6 @@ export class CreateTransactionDto {
   @IsString()
   @IsOptional()
   attachmentUrl?: string;
-
-  @IsEnum(['RECEIVED', 'PAID'])
-  @IsOptional()
-  paymentDirection?: 'RECEIVED' | 'PAID';
 
   @IsEnum(['CASH', 'TRANSFER', 'CHECK', 'OTHER'])
   @IsOptional()

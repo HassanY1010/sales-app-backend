@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
@@ -29,18 +34,26 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const minutes = Number(this.configService.get<string>('DUE_REMINDER_INTERVAL_MINUTES') || '60');
+    const minutes = Number(
+      this.configService.get<string>('DUE_REMINDER_INTERVAL_MINUTES') || '60',
+    );
     const intervalMs = Math.max(minutes, 5) * 60 * 1000;
 
     this.timer = setInterval(() => {
       void this.processDueReminders().catch((error) => {
-        this.logger.error(`Due reminders job failed: ${error.message}`, error.stack);
+        this.logger.error(
+          `Due reminders job failed: ${error.message}`,
+          error.stack,
+        );
       });
     }, intervalMs);
     this.timer.unref?.();
 
     void this.processDueReminders().catch((error) => {
-      this.logger.error(`Initial due reminders job failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `Initial due reminders job failed: ${error.message}`,
+        error.stack,
+      );
     });
   }
 
@@ -88,8 +101,12 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
 
-        const debtorBusiness = balance.greaterThan(0) ? connection.receiver : connection.requester;
-        const creditorBusiness = balance.greaterThan(0) ? connection.requester : connection.receiver;
+        const debtorBusiness = balance.greaterThan(0)
+          ? connection.receiver
+          : connection.requester;
+        const creditorBusiness = balance.greaterThan(0)
+          ? connection.requester
+          : connection.receiver;
         const amount = balance.abs();
 
         const created = await this.createReminderLogOnce({
@@ -99,7 +116,9 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
           reminderDate,
           dueDate: connection.account.dueDate,
           amount,
-          direction: balance.greaterThan(0) ? 'RECEIVER_OWES_REQUESTER' : 'REQUESTER_OWES_RECEIVER',
+          direction: balance.greaterThan(0)
+            ? 'RECEIVER_OWES_REQUESTER'
+            : 'REQUESTER_OWES_RECEIVER',
         });
 
         if (!created) {
@@ -123,7 +142,9 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (dueConnections.length > 0) {
-        this.logger.log(`Due reminders scanned=${dueConnections.length} sent=${sent} skipped=${skipped}`);
+        this.logger.log(
+          `Due reminders scanned=${dueConnections.length} sent=${sent} skipped=${skipped}`,
+        );
       }
 
       return { scanned: dueConnections.length, sent, skipped };
@@ -155,7 +176,10 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
       });
       return true;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         return false;
       }
       throw error;

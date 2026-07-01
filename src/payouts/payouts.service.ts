@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PayoutStatus, CommissionStatus, Prisma } from '@prisma/client';
@@ -17,7 +21,7 @@ export class PayoutsService {
   async createPayout(agentId: string, notes?: string, receiptUrl?: string) {
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
-      include: { user: { select: { fullName: true, id: true } } }
+      include: { user: { select: { fullName: true, id: true } } },
     });
 
     if (!agent) {
@@ -29,12 +33,14 @@ export class PayoutsService {
       const commissions = await tx.commission.findMany({
         where: {
           agentId,
-          status: { in: [CommissionStatus.PENDING, CommissionStatus.APPROVED] }
-        }
+          status: { in: [CommissionStatus.PENDING, CommissionStatus.APPROVED] },
+        },
       });
 
       if (commissions.length === 0) {
-        throw new BadRequestException('لا يوجد عمولات معلقة أو معتمدة لصرفها لهذا المندوب.');
+        throw new BadRequestException(
+          'لا يوجد عمولات معلقة أو معتمدة لصرفها لهذا المندوب.',
+        );
       }
 
       // 2. Sum amounts
@@ -52,18 +58,18 @@ export class PayoutsService {
           notes: notes || `صرف عمولة مبيعات للمندوب ${agent.user.fullName}`,
           receiptUrl: receiptUrl || null,
           paidAt: new Date(),
-        }
+        },
       });
 
       // 4. Update all selected commissions to PAID and associate them with this payout
       await tx.commission.updateMany({
         where: {
-          id: { in: commissions.map(c => c.id) }
+          id: { in: commissions.map((c) => c.id) },
         },
         data: {
           status: CommissionStatus.PAID,
           payoutId: payout.id,
-        }
+        },
       });
 
       // 5. Send real-time notification to the agent
@@ -77,16 +83,21 @@ export class PayoutsService {
           title,
           body,
           type: 'PAYOUT_COMPLETED',
-        }
+        },
       });
 
       setTimeout(async () => {
         try {
-          await this.notificationsService.sendPushNotification(agent.userId, title, body, {
-            type: 'PAYOUT_COMPLETED',
-            payoutId: payout.id,
-            amount: amountNum.toString(),
-          });
+          await this.notificationsService.sendPushNotification(
+            agent.userId,
+            title,
+            body,
+            {
+              type: 'PAYOUT_COMPLETED',
+              payoutId: payout.id,
+              amount: amountNum.toString(),
+            },
+          );
         } catch (e) {
           // Silent notification catch
         }
@@ -109,12 +120,12 @@ export class PayoutsService {
               select: {
                 fullName: true,
                 phoneNumber: true,
-              }
-            }
-          }
-        }
+              },
+            },
+          },
+        },
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -124,11 +135,11 @@ export class PayoutsService {
       include: {
         agent: {
           include: {
-            user: { select: { fullName: true } }
-          }
+            user: { select: { fullName: true } },
+          },
         },
-        commissions: true
-      }
+        commissions: true,
+      },
     });
     if (!payout) {
       throw new NotFoundException('سجل الصرف المطلوب غير موجود.');

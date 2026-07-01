@@ -35,7 +35,11 @@ describe('DueRemindersService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     config.get.mockReturnValue('false');
-    service = new DueRemindersService(prisma as any, notifications as any, config as any);
+    service = new DueRemindersService(
+      prisma as any,
+      notifications as any,
+      config as any,
+    );
   });
 
   it('sends due reminders to the debtor business and records a once-per-day log', async () => {
@@ -54,7 +58,9 @@ describe('DueRemindersService', () => {
     ]);
     prisma.dueReminderLog.create.mockResolvedValue({});
 
-    const result = await service.processDueReminders(new Date('2026-05-26T09:00:00.000Z'));
+    const result = await service.processDueReminders(
+      new Date('2026-05-26T09:00:00.000Z'),
+    );
 
     expect(result).toEqual({ scanned: 1, sent: 1, skipped: 0 });
     expect(prisma.dueReminderLog.create).toHaveBeenCalledWith({
@@ -94,7 +100,9 @@ describe('DueRemindersService', () => {
       }),
     );
 
-    const result = await service.processDueReminders(new Date('2026-05-26T10:00:00.000Z'));
+    const result = await service.processDueReminders(
+      new Date('2026-05-26T10:00:00.000Z'),
+    );
 
     expect(result).toEqual({ scanned: 1, sent: 0, skipped: 1 });
     expect(notifications.notifyUser).not.toHaveBeenCalled();

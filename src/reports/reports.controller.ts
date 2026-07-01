@@ -1,4 +1,10 @@
-import { Controller, Get, Query, UseGuards, ForbiddenException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
@@ -14,6 +20,11 @@ export class ReportsController {
   @Get('debts')
   @Roles('business')
   async getDebts(@CurrentUser() user: any, @Query() query: any) {
+    if (user.userType !== 'business') {
+      throw new ForbiddenException(
+        'Only business accounts can access debts report',
+      );
+    }
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
@@ -83,5 +94,13 @@ export class ReportsController {
       throw new ForbiddenException('User does not have an associated business');
     }
     return this.reportsService.getWeeklySalesData(user.businessId, query);
+  }
+
+  @Get('expenses')
+  async getExpensesReport(@CurrentUser() user: any, @Query() query: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.reportsService.getExpensesReport(user.businessId, query);
   }
 }

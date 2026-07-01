@@ -8,7 +8,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { google } from 'googleapis';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'crypto';
 import { Readable } from 'stream';
 import { PrismaService } from '../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -25,22 +30,33 @@ export class BackupService implements OnModuleInit {
 
   onModuleInit() {
     // FIX BACKUP-01: Validate required encryption key at startup to prevent silent failures
-    const encryptionKey = this.config.get<string>('BACKUP_TOKEN_ENCRYPTION_KEY');
+    const encryptionKey = this.config.get<string>(
+      'BACKUP_TOKEN_ENCRYPTION_KEY',
+    );
     if (!encryptionKey || encryptionKey.length < 32) {
       this.logger.warn(
         '⚠️  BACKUP_TOKEN_ENCRYPTION_KEY is missing or too short (must be ≥32 chars). ' +
-        'Google Drive backup/restore will fail. Set this env variable before using backup features.',
+          'Google Drive backup/restore will fail. Set this env variable before using backup features.',
       );
     } else {
-      this.logger.log('✅ BackupService initialized with valid encryption key.');
+      this.logger.log(
+        '✅ BackupService initialized with valid encryption key.',
+      );
     }
   }
-
 
   async exportData(businessId: string) {
     this.logger.log(`Exporting data for business: ${businessId}`);
     try {
-      const [business, users, connections, accounts, orders, transactions, notifications] = await Promise.all([
+      const [
+        business,
+        users,
+        connections,
+        accounts,
+        orders,
+        transactions,
+        notifications,
+      ] = await Promise.all([
         this.prisma.business.findUnique({ where: { id: businessId } }),
         this.prisma.user.findMany({
           where: { business: { id: businessId } },
@@ -59,11 +75,17 @@ export class BackupService implements OnModuleInit {
           },
         }),
         this.prisma.connection.findMany({
-          where: { OR: [{ requesterId: businessId }, { receiverId: businessId }] },
+          where: {
+            OR: [{ requesterId: businessId }, { receiverId: businessId }],
+          },
           include: { account: true },
         }),
         this.prisma.account.findMany({
-          where: { connection: { OR: [{ requesterId: businessId }, { receiverId: businessId }] } },
+          where: {
+            connection: {
+              OR: [{ requesterId: businessId }, { receiverId: businessId }],
+            },
+          },
         }),
         this.prisma.order.findMany({
           where: { OR: [{ senderId: businessId }, { receiverId: businessId }] },
@@ -134,7 +156,11 @@ export class BackupService implements OnModuleInit {
       }
 
       for (const connection of data.connections || []) {
-        if (connection.requesterId !== businessId && connection.receiverId !== businessId) continue;
+        if (
+          connection.requesterId !== businessId &&
+          connection.receiverId !== businessId
+        )
+          continue;
         await tx.connection.upsert({
           where: { id: connection.id },
           create: this.pick(connection, [
@@ -163,10 +189,14 @@ export class BackupService implements OnModuleInit {
       }
 
       const validConnectionIds = new Set(
-        (await tx.connection.findMany({
-          where: { OR: [{ requesterId: businessId }, { receiverId: businessId }] },
-          select: { id: true },
-        })).map((connection) => connection.id),
+        (
+          await tx.connection.findMany({
+            where: {
+              OR: [{ requesterId: businessId }, { receiverId: businessId }],
+            },
+            select: { id: true },
+          })
+        ).map((connection) => connection.id),
       );
 
       for (const account of data.accounts || []) {
@@ -198,7 +228,8 @@ export class BackupService implements OnModuleInit {
       }
 
       for (const order of data.orders || []) {
-        if (order.senderId !== businessId && order.receiverId !== businessId) continue;
+        if (order.senderId !== businessId && order.receiverId !== businessId)
+          continue;
         await tx.orderItem.deleteMany({ where: { orderId: order.id } });
         await tx.order.upsert({
           where: { id: order.id },
@@ -259,7 +290,11 @@ export class BackupService implements OnModuleInit {
       }
 
       for (const transaction of data.transactions || []) {
-        if (transaction.senderId !== businessId && transaction.receiverId !== businessId) continue;
+        if (
+          transaction.senderId !== businessId &&
+          transaction.receiverId !== businessId
+        )
+          continue;
         await tx.transaction.upsert({
           where: { id: transaction.id },
           create: this.pick(transaction, [
@@ -292,10 +327,12 @@ export class BackupService implements OnModuleInit {
         stats.transactions++;
       }
 
-      const userIds = (await tx.user.findMany({
-        where: { business: { id: businessId } },
-        select: { id: true },
-      })).map((user) => user.id);
+      const userIds = (
+        await tx.user.findMany({
+          where: { business: { id: businessId } },
+          select: { id: true },
+        })
+      ).map((user) => user.id);
 
       await tx.notification.deleteMany({ where: { userId: { in: userIds } } });
       for (const notification of data.notifications || []) {
@@ -338,7 +375,9 @@ export class BackupService implements OnModuleInit {
 
   getGoogleAuthUrl(businessId: string, redirectUri?: string) {
     const oauth2 = this.createOAuthClient(redirectUri);
-    const state = Buffer.from(JSON.stringify({ businessId })).toString('base64url');
+    const state = Buffer.from(JSON.stringify({ businessId })).toString(
+      'base64url',
+    );
 
     return {
       authUrl: oauth2.generateAuthUrl({
@@ -368,7 +407,9 @@ export class BackupService implements OnModuleInit {
     const { tokens } = await oauth2.getToken(code);
 
     if (!tokens.refresh_token) {
-      throw new BadRequestException('Google did not return a refresh token. Revoke app access and connect again.');
+      throw new BadRequestException(
+        'Google did not return a refresh token. Revoke app access and connect again.',
+      );
     }
 
     oauth2.setCredentials(tokens);
@@ -382,13 +423,17 @@ export class BackupService implements OnModuleInit {
         refreshToken: this.encryptSecret(tokens.refresh_token),
         email: profile.data.email,
         scope: tokens.scope,
-        expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined,
+        expiresAt: tokens.expiry_date
+          ? new Date(tokens.expiry_date)
+          : undefined,
       },
       update: {
         refreshToken: this.encryptSecret(tokens.refresh_token),
         email: profile.data.email,
         scope: tokens.scope,
-        expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined,
+        expiresAt: tokens.expiry_date
+          ? new Date(tokens.expiry_date)
+          : undefined,
       },
     });
 
@@ -444,7 +489,9 @@ export class BackupService implements OnModuleInit {
         businessId,
         fileId: response.data.id!,
         fileName: response.data.name || fileName,
-        fileSize: response.data.size ? Number(response.data.size) : Buffer.byteLength(json),
+        fileSize: response.data.size
+          ? Number(response.data.size)
+          : Buffer.byteLength(json),
         checksum,
       },
     });
@@ -474,14 +521,21 @@ export class BackupService implements OnModuleInit {
     return response.data.files || [];
   }
 
-  async restoreFromGoogleDrive(businessId: string, userId: string | undefined, fileId: string) {
+  async restoreFromGoogleDrive(
+    businessId: string,
+    userId: string | undefined,
+    fileId: string,
+  ) {
     const drive = await this.createDriveClient(businessId);
     const response = await drive.files.get(
       { fileId, alt: 'media' },
       { responseType: 'text' },
     );
 
-    const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+    const data =
+      typeof response.data === 'string'
+        ? JSON.parse(response.data)
+        : response.data;
     const result = await this.restoreData(businessId, data);
 
     await this.audit.record({
@@ -496,13 +550,19 @@ export class BackupService implements OnModuleInit {
   }
 
   private async createDriveClient(businessId: string) {
-    const credential = await this.prisma.cloudBackupCredential.findUnique({ where: { businessId } });
+    const credential = await this.prisma.cloudBackupCredential.findUnique({
+      where: { businessId },
+    });
     if (!credential) {
-      throw new NotFoundException('Google Drive is not connected for this business');
+      throw new NotFoundException(
+        'Google Drive is not connected for this business',
+      );
     }
 
     const oauth2 = this.createOAuthClient();
-    oauth2.setCredentials({ refresh_token: this.decryptSecret(credential.refreshToken) });
+    oauth2.setCredentials({
+      refresh_token: this.decryptSecret(credential.refreshToken),
+    });
     return google.drive({ version: 'v3', auth: oauth2 });
   }
 
@@ -511,14 +571,24 @@ export class BackupService implements OnModuleInit {
     const clientSecret = this.config.get<string>('GOOGLE_DRIVE_CLIENT_SECRET');
 
     if (!clientId || !clientSecret) {
-      throw new InternalServerErrorException('Google Drive OAuth is not configured');
+      throw new InternalServerErrorException(
+        'Google Drive OAuth is not configured',
+      );
     }
 
-    return new google.auth.OAuth2(clientId, clientSecret, this.resolveRedirectUri(redirectUri));
+    return new google.auth.OAuth2(
+      clientId,
+      clientSecret,
+      this.resolveRedirectUri(redirectUri),
+    );
   }
 
   private resolveRedirectUri(redirectUri?: string) {
-    return redirectUri || this.config.get<string>('GOOGLE_DRIVE_REDIRECT_URI') || 'urn:ietf:wg:oauth:2.0:oob';
+    return (
+      redirectUri ||
+      this.config.get<string>('GOOGLE_DRIVE_REDIRECT_URI') ||
+      'urn:ietf:wg:oauth:2.0:oob'
+    );
   }
 
   private pick(source: Record<string, any>, keys: string[]) {
@@ -539,8 +609,17 @@ export class BackupService implements OnModuleInit {
       throw new BadRequestException('Invalid backup payload');
     }
 
-    for (const key of ['connections', 'accounts', 'orders', 'transactions', 'notifications']) {
-      if (backupData.data[key] !== undefined && !Array.isArray(backupData.data[key])) {
+    for (const key of [
+      'connections',
+      'accounts',
+      'orders',
+      'transactions',
+      'notifications',
+    ]) {
+      if (
+        backupData.data[key] !== undefined &&
+        !Array.isArray(backupData.data[key])
+      ) {
         throw new BadRequestException(`Invalid backup collection: ${key}`);
       }
     }
@@ -552,7 +631,10 @@ export class BackupService implements OnModuleInit {
 
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', key, iv);
-    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const encrypted = Buffer.concat([
+      cipher.update(value, 'utf8'),
+      cipher.final(),
+    ]);
     const tag = cipher.getAuthTag();
 
     return [
@@ -566,18 +648,26 @@ export class BackupService implements OnModuleInit {
   private decryptSecret(value: string) {
     if (!value.startsWith('enc:v1:')) {
       if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException('Stored Google Drive credential is not encrypted');
+        throw new InternalServerErrorException(
+          'Stored Google Drive credential is not encrypted',
+        );
       }
       return value;
     }
 
     const key = this.getBackupEncryptionKey();
     if (!key) {
-      throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY is required to decrypt Google Drive credentials');
+      throw new InternalServerErrorException(
+        'BACKUP_TOKEN_ENCRYPTION_KEY is required to decrypt Google Drive credentials',
+      );
     }
 
     const [, , ivPart, tagPart, encryptedPart] = value.split(':');
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivPart, 'base64url'));
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      key,
+      Buffer.from(ivPart, 'base64url'),
+    );
     decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
 
     return Buffer.concat([
@@ -590,15 +680,20 @@ export class BackupService implements OnModuleInit {
     const configured = this.config.get<string>('BACKUP_TOKEN_ENCRYPTION_KEY');
     if (!configured) {
       if (process.env.NODE_ENV === 'production') {
-        throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY is required in production');
+        throw new InternalServerErrorException(
+          'BACKUP_TOKEN_ENCRYPTION_KEY is required in production',
+        );
       }
       return null;
     }
 
     const decoded = Buffer.from(configured, 'base64');
     if (decoded.length === 32) return decoded;
-    if (configured.length >= 32) return createHash('sha256').update(configured).digest();
+    if (configured.length >= 32)
+      return createHash('sha256').update(configured).digest();
 
-    throw new InternalServerErrorException('BACKUP_TOKEN_ENCRYPTION_KEY must be at least 32 characters or 32 base64 bytes');
+    throw new InternalServerErrorException(
+      'BACKUP_TOKEN_ENCRYPTION_KEY must be at least 32 characters or 32 base64 bytes',
+    );
   }
 }

@@ -7,13 +7,14 @@ import { PaginationDto } from '../common/dto/pagination.dto';
 export class ExpensesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(userId: string, dto: CreateExpenseDto) {
+  async create(userId: string, businessId: string, dto: CreateExpenseDto) {
     const expense = await this.prisma.expense.create({
       data: {
         amount: dto.amount,
         description: dto.description,
         date: dto.date ? new Date(dto.date) : new Date(),
         userId,
+        businessId,
       },
     });
 
@@ -21,6 +22,7 @@ export class ExpensesService {
     await this.prisma.auditLog.create({
       data: {
         userId,
+        businessId,
         action: 'CREATE',
         resource: 'EXPENSE',
         resourceId: expense.id,
@@ -31,9 +33,9 @@ export class ExpensesService {
     return expense;
   }
 
-  async findAll(userId: string, pagination: PaginationDto) {
+  async findAll(businessId: string, pagination: PaginationDto) {
     const { page = 1, limit = 10 } = pagination;
-    const where = { userId };
+    const where = { businessId };
 
     const [data, total] = await Promise.all([
       this.prisma.expense.findMany({
@@ -56,20 +58,20 @@ export class ExpensesService {
     };
   }
 
-  async findOne(userId: string, id: string) {
+  async findOne(businessId: string, id: string) {
     const expense = await this.prisma.expense.findUnique({
       where: { id },
     });
 
-    if (!expense || expense.userId !== userId) {
+    if (!expense || expense.businessId !== businessId) {
       throw new NotFoundException('المصروف غير موجود');
     }
 
     return expense;
   }
 
-  async update(userId: string, id: string, dto: Partial<CreateExpenseDto>) {
-    const expense = await this.findOne(userId, id);
+  async update(businessId: string, id: string, dto: Partial<CreateExpenseDto>) {
+    const expense = await this.findOne(businessId, id);
 
     const updated = await this.prisma.expense.update({
       where: { id },
@@ -83,7 +85,7 @@ export class ExpensesService {
     // Audit log
     await this.prisma.auditLog.create({
       data: {
-        userId,
+        businessId,
         action: 'UPDATE',
         resource: 'EXPENSE',
         resourceId: id,
@@ -94,15 +96,15 @@ export class ExpensesService {
     return updated;
   }
 
-  async remove(userId: string, id: string) {
-    await this.findOne(userId, id);
+  async remove(businessId: string, id: string) {
+    await this.findOne(businessId, id);
 
     await this.prisma.expense.delete({ where: { id } });
 
     // Audit log
     await this.prisma.auditLog.create({
       data: {
-        userId,
+        businessId,
         action: 'DELETE',
         resource: 'EXPENSE',
         resourceId: id,

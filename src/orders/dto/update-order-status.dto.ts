@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsNumberString, IsOptional, IsString, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 
 export class UpdateOrderStatusDto {
   @IsEnum(['PENDING', 'ACCEPTED', 'REJECTED', 'COMPLETED', 'CANCELLED'])

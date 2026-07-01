@@ -14,12 +14,15 @@ import { DatabaseModule } from '../database/database.module';
       useFactory: async (configService: ConfigService) => {
         const secret = configService.get<string>('JWT_SECRET');
         if (!secret || secret.length < 32) {
-          throw new Error('JWT_SECRET must be configured with at least 32 characters');
+          throw new Error(
+            'JWT_SECRET must be configured with at least 32 characters',
+          );
         }
         return {
           secret,
           signOptions: {
-            expiresIn: (configService.get<string>('JWT_EXPIRES_IN') || '15m') as any,
+            expiresIn: (configService.get<string>('JWT_EXPIRES_IN') ||
+              '15m') as any,
           },
         };
       },

@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { AgentStatus, CommissionType, Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
@@ -28,7 +33,8 @@ export class AgentsService {
     if (!user) throw new NotFoundException('المستخدم غير موجود.');
 
     const existing = await this.prisma.agent.findUnique({ where: { userId } });
-    if (existing) throw new ConflictException('هذا المستخدم مسجل بالفعل كمندوب.');
+    if (existing)
+      throw new ConflictException('هذا المستخدم مسجل بالفعل كمندوب.');
 
     // Use provided code, or auto-generate a unique one
     let referralCode = customReferralCode
@@ -36,13 +42,22 @@ export class AgentsService {
       : this.generateCode();
 
     if (customReferralCode) {
-      const collision = await this.prisma.agent.findUnique({ where: { referralCode } });
-      if (collision) throw new ConflictException('كود الإحالة مستخدم مسبقاً، جرب كوداً آخر.');
+      const collision = await this.prisma.agent.findUnique({
+        where: { referralCode },
+      });
+      if (collision)
+        throw new ConflictException(
+          'كود الإحالة مستخدم مسبقاً، جرب كوداً آخر.',
+        );
     } else {
-      let collision = await this.prisma.agent.findUnique({ where: { referralCode } });
+      let collision = await this.prisma.agent.findUnique({
+        where: { referralCode },
+      });
       while (collision) {
         referralCode = this.generateCode();
-        collision = await this.prisma.agent.findUnique({ where: { referralCode } });
+        collision = await this.prisma.agent.findUnique({
+          where: { referralCode },
+        });
       }
     }
 
@@ -52,13 +67,17 @@ export class AgentsService {
         referralCode,
         regionId: regionId || null,
         commissionType: commissionType || CommissionType.PERCENTAGE,
-        commissionValue: new Prisma.Decimal(commissionValue !== undefined ? commissionValue : 10.00),
+        commissionValue: new Prisma.Decimal(
+          commissionValue !== undefined ? commissionValue : 10.0,
+        ),
         status: AgentStatus.ACTIVE,
       },
       include: {
-        user: { select: { id: true, fullName: true, email: true, phoneNumber: true } },
+        user: {
+          select: { id: true, fullName: true, email: true, phoneNumber: true },
+        },
         region: true,
-      }
+      },
     });
   }
 
@@ -71,17 +90,17 @@ export class AgentsService {
             fullName: true,
             email: true,
             phoneNumber: true,
-          }
+          },
         },
         region: true,
         _count: {
           select: {
             referredUsers: true,
             commissions: true,
-          }
-        }
+          },
+        },
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -95,10 +114,10 @@ export class AgentsService {
             fullName: true,
             email: true,
             phoneNumber: true,
-          }
+          },
         },
         region: true,
-      }
+      },
     });
     if (!agent) {
       throw new NotFoundException('المندوب غير موجود.');
@@ -116,10 +135,10 @@ export class AgentsService {
             fullName: true,
             email: true,
             phoneNumber: true,
-          }
+          },
         },
         region: true,
-      }
+      },
     });
     if (!agent) {
       throw new NotFoundException('حساب المندوب الخاص بك غير موجود.');
@@ -131,8 +150,15 @@ export class AgentsService {
     const agent = await this.prisma.agent.findFirst({
       where: {
         referralCode: code.toUpperCase().trim(),
-        status: AgentStatus.ACTIVE
-      }
+        status: AgentStatus.ACTIVE,
+      },
+      include: {
+        user: {
+          select: {
+            fullName: true,
+          },
+        },
+      },
     });
     if (!agent) {
       throw new BadRequestException('كود الإحالة المدخل غير صالح أو غير نشط.');
@@ -140,13 +166,23 @@ export class AgentsService {
     return agent;
   }
 
-  async update(id: string, data: { regionId?: string; commissionType?: CommissionType; commissionValue?: number; status?: AgentStatus }) {
+  async update(
+    id: string,
+    data: {
+      regionId?: string;
+      commissionType?: CommissionType;
+      commissionValue?: number;
+      status?: AgentStatus;
+    },
+  ) {
     await this.findOne(id);
 
     const updateData: any = {};
     if (data.regionId !== undefined) updateData.regionId = data.regionId;
-    if (data.commissionType !== undefined) updateData.commissionType = data.commissionType;
-    if (data.commissionValue !== undefined) updateData.commissionValue = new Prisma.Decimal(data.commissionValue);
+    if (data.commissionType !== undefined)
+      updateData.commissionType = data.commissionType;
+    if (data.commissionValue !== undefined)
+      updateData.commissionValue = new Prisma.Decimal(data.commissionValue);
     if (data.status !== undefined) updateData.status = data.status;
 
     return this.prisma.agent.update({
@@ -159,10 +195,10 @@ export class AgentsService {
             fullName: true,
             email: true,
             phoneNumber: true,
-          }
+          },
         },
         region: true,
-      }
+      },
     });
   }
 
@@ -172,28 +208,40 @@ export class AgentsService {
       include: {
         referredUsers: {
           select: {
-            id: true, fullName: true, phoneNumber: true,
-            userType: true, isActive: true, createdAt: true,
+            id: true,
+            fullName: true,
+            phoneNumber: true,
+            userType: true,
+            isActive: true,
+            createdAt: true,
           },
-          orderBy: { createdAt: 'desc' }
-        }
-      }
+          orderBy: { createdAt: 'desc' },
+        },
+      },
     });
 
     if (!agent) throw new NotFoundException('المندوب غير موجود.');
 
-    const commissions = await this.prisma.commission.findMany({ where: { agentId } });
+    const commissions = await this.prisma.commission.findMany({
+      where: { agentId },
+    });
 
-    let totalEarned  = new Prisma.Decimal(0);
-    let paidAmount   = new Prisma.Decimal(0);
+    let totalEarned = new Prisma.Decimal(0);
+    let paidAmount = new Prisma.Decimal(0);
     let pendingAmount = new Prisma.Decimal(0);
-    let pendingCount  = 0;
-    let paidCount     = 0;
+    let pendingCount = 0;
+    let paidCount = 0;
 
     for (const comm of commissions) {
       totalEarned = totalEarned.add(comm.amount);
-      if (comm.status === 'PAID')    { paidAmount    = paidAmount.add(comm.amount);    paidCount++;    }
-      if (comm.status === 'PENDING') { pendingAmount  = pendingAmount.add(comm.amount); pendingCount++; }
+      if (comm.status === 'PAID') {
+        paidAmount = paidAmount.add(comm.amount);
+        paidCount++;
+      }
+      if (comm.status === 'PENDING') {
+        pendingAmount = pendingAmount.add(comm.amount);
+        pendingCount++;
+      }
     }
 
     return {

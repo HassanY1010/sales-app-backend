@@ -10,10 +10,7 @@ export class ReportsService {
     // Other businesses owe me money
     const partyFilter = query.partyId
       ? {
-          OR: [
-            { requesterId: query.partyId },
-            { receiverId: query.partyId },
-          ],
+          OR: [{ requesterId: query.partyId }, { receiverId: query.partyId }],
         }
       : {};
 
@@ -52,10 +49,7 @@ export class ReportsService {
     // I owe money to other businesses
     const partyFilter = query.partyId
       ? {
-          OR: [
-            { requesterId: query.partyId },
-            { receiverId: query.partyId },
-          ],
+          OR: [{ requesterId: query.partyId }, { receiverId: query.partyId }],
         }
       : {};
 
@@ -117,14 +111,15 @@ export class ReportsService {
 
     orders.forEach((o) => {
       if (o.status === 'COMPLETED' || o.status === 'ACCEPTED') {
-        if (o.senderId === businessId) totalPurchases = totalPurchases.plus(o.total as any);
+        if (o.senderId === businessId)
+          totalPurchases = totalPurchases.plus(o.total as any);
         else totalSales = totalSales.plus(o.total as any);
       }
     });
 
     connections.forEach((c) => {
       const isRequester = c.requesterId === businessId;
-      const balance = new Decimal(c.account?.balance as any || 0);
+      const balance = new Decimal((c.account?.balance as any) || 0);
       if (isRequester) {
         if (balance.greaterThan(0)) receivable = receivable.plus(balance);
         else payable = payable.plus(balance.abs());
@@ -141,8 +136,10 @@ export class ReportsService {
       payable: payable.toString(),
       ordersCount: orders.length,
       pendingOrdersCount: orders.filter((o) => o.status === 'PENDING').length,
-      customersCount: connections.filter((c) => c.connectionType === 'CUSTOMER').length,
-      suppliersCount: connections.filter((c) => c.connectionType === 'SUPPLIER').length,
+      customersCount: connections.filter((c) => c.connectionType === 'CUSTOMER')
+        .length,
+      suppliersCount: connections.filter((c) => c.connectionType === 'SUPPLIER')
+        .length,
       period: this.describePeriod(query, dateRange),
     };
   }
@@ -237,7 +234,10 @@ export class ReportsService {
       data: transactions.map((transaction) => ({
         ...transaction,
         direction: transaction.senderId === businessId ? 'sent' : 'received',
-        party: transaction.senderId === businessId ? transaction.receiver : transaction.sender,
+        party:
+          transaction.senderId === businessId
+            ? transaction.receiver
+            : transaction.sender,
       })),
       summary: {
         count: transactions.length,
@@ -255,35 +255,41 @@ export class ReportsService {
 
   async exportReport(businessId: string, query: any = {}) {
     const type = query.type === 'transactions' ? 'transactions' : 'orders';
-    const exportQuery = { ...query, page: 1, limit: Math.min(Number(query.limit || 1000), 5000) };
-    const report = type === 'transactions'
-      ? await this.getTransactionsReport(businessId, exportQuery)
-      : await this.getOrdersReport(businessId, exportQuery);
+    const exportQuery = {
+      ...query,
+      page: 1,
+      limit: Math.min(Number(query.limit || 1000), 5000),
+    };
+    const report =
+      type === 'transactions'
+        ? await this.getTransactionsReport(businessId, exportQuery)
+        : await this.getOrdersReport(businessId, exportQuery);
 
-    const rows = type === 'transactions'
-      ? report.data.map((transaction: any) => ({
-          id: transaction.id,
-          date: transaction.createdAt,
-          type: transaction.transactionType,
-          direction: transaction.direction,
-          party: transaction.party?.name,
-          amount: transaction.amount,
-          currency: transaction.currency,
-          voucherNumber: transaction.voucherNumber,
-          note: transaction.note,
-        }))
-      : report.data.map((order: any) => ({
-          id: order.id,
-          orderNumber: order.orderNumber,
-          date: order.createdAt,
-          status: order.status,
-          direction: order.direction,
-          party: order.party?.name,
-          total: order.total,
-          currency: order.currency,
-          isCash: order.isCash,
-          dueDate: order.dueDate,
-        }));
+    const rows =
+      type === 'transactions'
+        ? report.data.map((transaction: any) => ({
+            id: transaction.id,
+            date: transaction.createdAt,
+            type: transaction.transactionType,
+            direction: transaction.direction,
+            party: transaction.party?.name,
+            amount: transaction.amount,
+            currency: transaction.currency,
+            voucherNumber: transaction.voucherNumber,
+            note: transaction.note,
+          }))
+        : report.data.map((order: any) => ({
+            id: order.id,
+            orderNumber: order.orderNumber,
+            date: order.createdAt,
+            status: order.status,
+            direction: order.direction,
+            party: order.party?.name,
+            total: order.total,
+            currency: order.currency,
+            isCash: order.isCash,
+            dueDate: order.dueDate,
+          }));
 
     const content = this.toCsv(rows);
     const dateStamp = new Date().toISOString().slice(0, 10);
@@ -320,8 +326,10 @@ export class ReportsService {
 
     return connections.map((connection) => {
       const isRequester = connection.requesterId === businessId;
-      const otherBusiness = isRequester ? connection.receiver : connection.requester;
-      const balance = new Decimal(connection.account?.balance as any || 0);
+      const otherBusiness = isRequester
+        ? connection.receiver
+        : connection.requester;
+      const balance = new Decimal((connection.account?.balance as any) || 0);
       const amountForMe = isRequester ? balance : balance.negated();
 
       return {
@@ -333,7 +341,9 @@ export class ReportsService {
         balance: balance.toString(),
         amount: amountForMe.abs().toString(),
         direction: amountForMe.greaterThan(0) ? 'RECEIVABLE' : 'PAYABLE',
-        isOverdue: connection.account?.dueDate ? connection.account.dueDate <= new Date() : false,
+        isOverdue: connection.account?.dueDate
+          ? connection.account.dueDate <= new Date()
+          : false,
       };
     });
   }
@@ -375,16 +385,23 @@ export class ReportsService {
       })),
     ];
 
-    return activities.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 10);
+    return activities
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 10);
   }
 
   async getWeeklySalesData(businessId: string, query: any = {}) {
-    const dateRange = this.resolveDateRange({ period: query.period || 'week', ...query });
-    const startDate = dateRange?.gte ?? (() => {
-      const date = new Date();
-      date.setDate(date.getDate() - 7);
-      return date;
-    })();
+    const dateRange = this.resolveDateRange({
+      period: query.period || 'week',
+      ...query,
+    });
+    const startDate =
+      dateRange?.gte ??
+      (() => {
+        const date = new Date();
+        date.setDate(date.getDate() - 7);
+        return date;
+      })();
 
     const orders = await this.prisma.order.findMany({
       where: {
@@ -400,10 +417,10 @@ export class ReportsService {
 
     const dailyData: Record<string, Decimal> = {};
     for (let i = 0; i < 7; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dayKey = d.toISOString().split('T')[0];
-        dailyData[dayKey] = new Decimal(0);
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayKey = d.toISOString().split('T')[0];
+      dailyData[dayKey] = new Decimal(0);
     }
 
     orders.forEach((o) => {
@@ -419,6 +436,45 @@ export class ReportsService {
         date,
         total: dailyData[date].toString(),
       }));
+  }
+
+  async getExpensesReport(businessId: string, query: any = {}) {
+    const { page = 1, limit = 20 } = this.resolvePagination(query);
+    const dateRange = this.resolveDateRange(query);
+    const where: any = {
+      businessId,
+      ...(dateRange && { date: dateRange }),
+    };
+
+    const [expenses, total] = await Promise.all([
+      this.prisma.expense.findMany({
+        where,
+        orderBy: { date: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.expense.count({ where }),
+    ]);
+
+    const totalAmount = expenses.reduce(
+      (sum, expense) => sum.plus(expense.amount as any),
+      new Decimal(0),
+    );
+
+    return {
+      data: expenses,
+      summary: {
+        count: expenses.length,
+        totalAmount: totalAmount.toString(),
+        period: this.describePeriod(query, dateRange),
+      },
+      meta: {
+        total,
+        page,
+        lastPage: Math.ceil(total / limit),
+        limit,
+      },
+    };
   }
 
   private resolvePagination(query: any) {
@@ -486,7 +542,9 @@ export class ReportsService {
 
     return [
       headers.join(','),
-      ...rows.map((row) => headers.map((header) => escape(row[header])).join(',')),
+      ...rows.map((row) =>
+        headers.map((header) => escape(row[header])).join(','),
+      ),
     ].join('\n');
   }
 }

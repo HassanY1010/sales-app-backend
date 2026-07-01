@@ -20,7 +20,11 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.register(dto, req.ip, req.headers['user-agent']);
+    const result = await this.authService.register(
+      dto,
+      req.ip,
+      req.headers['user-agent'],
+    );
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return result;
   }
@@ -32,7 +36,11 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.login(dto, req.ip, req.headers['user-agent']);
+    const result = await this.authService.login(
+      dto,
+      req.ip,
+      req.headers['user-agent'],
+    );
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return result;
   }
@@ -44,8 +52,13 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = body.refreshToken || this.getCookie(req, 'refresh_token');
-    const result = await this.authService.refresh(refreshToken || '', req.ip, req.headers['user-agent']);
+    const refreshToken =
+      body.refreshToken || this.getCookie(req, 'refresh_token');
+    const result = await this.authService.refresh(
+      refreshToken || '',
+      req.ip,
+      req.headers['user-agent'],
+    );
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
     return result;
   }
@@ -56,21 +69,26 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = body.refreshToken || this.getCookie(req, 'refresh_token');
+    const refreshToken =
+      body.refreshToken || this.getCookie(req, 'refresh_token');
     this.clearAuthCookies(res);
     return this.authService.logout(refreshToken);
   }
 
   @Post('verify-reset-pin')
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({ default: { limit: 3, ttl: 300_000 } }) // 3 attempts per 5 minutes
   async verifyResetPin(@Body() body: VerifyResetPinDto) {
     return this.authService.verifyResetPin(body.identifier, body.pin);
   }
 
   @Post('reset-password')
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({ default: { limit: 3, ttl: 300_000 } }) // 3 attempts per 5 minutes
   async resetPassword(@Body() body: ResetPasswordDto) {
-    return this.authService.resetPassword(body.identifier, body.newPassword, body.pin);
+    return this.authService.resetPassword(
+      body.identifier,
+      body.newPassword,
+      body.pin,
+    );
   }
 
   @Post('forgot-password')
@@ -79,7 +97,11 @@ export class AuthController {
     return this.authService.forgotPassword(body.email);
   }
 
-  private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+  private setAuthCookies(
+    res: Response,
+    accessToken: string,
+    refreshToken: string,
+  ) {
     const secure = process.env.NODE_ENV === 'production';
     const sameSite = secure ? 'none' : 'lax';
     const refreshDays = Number(process.env.JWT_REFRESH_EXPIRES_DAYS || '30');
@@ -104,8 +126,18 @@ export class AuthController {
   private clearAuthCookies(res: Response) {
     const secure = process.env.NODE_ENV === 'production';
     const sameSite = secure ? 'none' : 'lax';
-    res.clearCookie('access_token', { httpOnly: true, secure, sameSite, path: '/' });
-    res.clearCookie('refresh_token', { httpOnly: true, secure, sameSite, path: '/' });
+    res.clearCookie('access_token', {
+      httpOnly: true,
+      secure,
+      sameSite,
+      path: '/',
+    });
+    res.clearCookie('refresh_token', {
+      httpOnly: true,
+      secure,
+      sameSite,
+      path: '/',
+    });
   }
 
   private getCookie(req: Request, name: string) {

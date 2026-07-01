@@ -25,7 +25,10 @@ export class AdjustmentRequestsController {
   constructor(private readonly service: AdjustmentRequestsService) {}
 
   @Post()
-  async create(@CurrentUser() user: any, @Body() dto: CreateAdjustmentRequestDto) {
+  async create(
+    @CurrentUser() user: any,
+    @Body() dto: CreateAdjustmentRequestDto,
+  ) {
     this.ensureBusiness(user);
     return this.service.create(user.businessId, user.userId, dto);
   }
@@ -33,7 +36,8 @@ export class AdjustmentRequestsController {
   @Get()
   async list(
     @CurrentUser() user: any,
-    @Query() pagination: PaginationDto & { status?: string; targetType?: string },
+    @Query()
+    pagination: PaginationDto & { status?: string; targetType?: string },
   ) {
     this.ensureBusiness(user);
     return this.service.list(user.businessId, pagination);
@@ -58,7 +62,12 @@ export class AdjustmentRequestsController {
     @Body() dto: RejectAdjustmentRequestDto,
   ) {
     this.ensureBusiness(user);
-    return this.service.reject(user.businessId, user.userId, id, dto.rejectionReason);
+    return this.service.reject(
+      user.businessId,
+      user.userId,
+      id,
+      dto.rejectionReason,
+    );
   }
 
   private ensureBusiness(user: any) {

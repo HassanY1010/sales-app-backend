@@ -56,7 +56,10 @@ describe('FinanceService ledger movements', () => {
         }),
       },
       transaction: {
-        create: jest.fn(async ({ data }: any) => ({ id: 'transaction-1', ...data })),
+        create: jest.fn(async ({ data }: any) => ({
+          id: 'transaction-1',
+          ...data,
+        })),
       },
       auditLog: {
         create: jest.fn(),
@@ -87,7 +90,11 @@ describe('FinanceService ledger movements', () => {
       }
       return Promise.resolve(null);
     });
-    service = new FinanceService(prisma as any, notifications as any, events as any);
+    service = new FinanceService(
+      prisma as any,
+      notifications as any,
+      events as any,
+    );
   });
 
   it('increases requester-perspective balance when requester sells to receiver', async () => {
@@ -172,9 +179,24 @@ describe('FinanceService ledger movements', () => {
       connection: { requesterId, receiverId },
     });
     prisma.transaction.findMany.mockResolvedValue([
-      { senderId: requesterId, receiverId, transactionType: 'SALE', amount: '100' },
-      { senderId: receiverId, receiverId: requesterId, transactionType: 'PAYMENT', amount: '30' },
-      { senderId: receiverId, receiverId: requesterId, transactionType: 'ADJUSTMENT', amount: '10' },
+      {
+        senderId: requesterId,
+        receiverId,
+        transactionType: 'SALE',
+        amount: '100',
+      },
+      {
+        senderId: receiverId,
+        receiverId: requesterId,
+        transactionType: 'PAYMENT',
+        amount: '30',
+      },
+      {
+        senderId: receiverId,
+        receiverId: requesterId,
+        transactionType: 'ADJUSTMENT',
+        amount: '10',
+      },
     ]);
     prisma.account.update.mockResolvedValue({});
 

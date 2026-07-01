@@ -54,6 +54,22 @@ export class RegisterDto {
   @ValidateIf((o) => o.userType === 'business')
   @IsString()
   @IsOptional()
+  @IsEnum([
+    'محلات',
+    'بقالة',
+    'بسطة',
+    'صيدلية',
+    'مطعم',
+    'كفتيريا',
+    'بوفية',
+    'شركة',
+    'عيادة',
+    'موزع',
+    'مستشفى',
+    'معمل',
+    'مستهلك',
+    'أخرى',
+  ])
   @MaxLength(80)
   businessType?: string;
 

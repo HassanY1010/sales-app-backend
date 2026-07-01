@@ -49,17 +49,26 @@ export class UsersController {
   }
 
   @Post('me/change-password')
-  async changePassword(@CurrentUser() user: any, @Body() dto: ChangePasswordDto) {
+  async changePassword(
+    @CurrentUser() user: any,
+    @Body() dto: ChangePasswordDto,
+  ) {
     return this.usersService.changePassword(user.userId, dto);
   }
 
   @Post('me/change-pin')
-  async changeSecurityPin(@CurrentUser() user: any, @Body() body: { pin: string }) {
+  async changeSecurityPin(
+    @CurrentUser() user: any,
+    @Body() body: { pin: string },
+  ) {
     return this.usersService.changeSecurityPin(user.userId, body.pin);
   }
 
   @Post('me/push-token')
-  async updatePushToken(@CurrentUser() user: any, @Body() body: { pushToken: string }) {
+  async updatePushToken(
+    @CurrentUser() user: any,
+    @Body() body: { pushToken: string },
+  ) {
     return this.usersService.updatePushToken(user.userId, body.pushToken);
   }
 
@@ -73,7 +82,9 @@ export class UsersController {
       ) => {
         if (!allowedLogoMimeTypes.has(file.mimetype)) {
           return callback(
-            new BadRequestException('Only JPG, PNG, and WEBP logo images are allowed'),
+            new BadRequestException(
+              'Only JPG, PNG, and WEBP logo images are allowed',
+            ),
             false,
           );
         }
@@ -99,7 +110,9 @@ export class UsersController {
       ) => {
         if (!allowedLogoMimeTypes.has(file.mimetype)) {
           return callback(
-            new BadRequestException('Only JPG, PNG, and WEBP logo images are allowed'),
+            new BadRequestException(
+              'Only JPG, PNG, and WEBP logo images are allowed',
+            ),
             false,
           );
         }
@@ -122,13 +135,18 @@ export class UsersController {
 
     const extension = allowedLogoMimeTypes.get(file.mimetype);
     if (!extension) {
-      throw new BadRequestException('Only JPG, PNG, and WEBP logo images are allowed');
+      throw new BadRequestException(
+        'Only JPG, PNG, and WEBP logo images are allowed',
+      );
     }
 
     ensureLogoUploadDir();
     const filename = `${randomUUID()}${extension}`;
     await writeFile(join(logoUploadDir, filename), file.buffer);
 
-    return this.usersService.updateBusinessLogo(userId, `/uploads/logos/${filename}`);
+    return this.usersService.updateBusinessLogo(
+      userId,
+      `/uploads/logos/${filename}`,
+    );
   }
 }

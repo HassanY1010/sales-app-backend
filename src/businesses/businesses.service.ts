@@ -65,8 +65,10 @@ export class BusinessesService {
     return businesses.map((business) => {
       const connection = existingConnections.find(
         (item) =>
-          (item.requesterId === currentBusinessId && item.receiverId === business.id) ||
-          (item.requesterId === business.id && item.receiverId === currentBusinessId),
+          (item.requesterId === currentBusinessId &&
+            item.receiverId === business.id) ||
+          (item.requesterId === business.id &&
+            item.receiverId === currentBusinessId),
       );
 
       return {

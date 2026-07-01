@@ -10,7 +10,10 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { ConnectionsService } from './connections.service';
-import { AcceptConnectionDto, CreateConnectionDto } from './dto/create-connection.dto';
+import {
+  AcceptConnectionDto,
+  CreateConnectionDto,
+} from './dto/create-connection.dto';
 import { ManualAddConnectionDto } from './dto/manual-add-connection.dto';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { PaginationDto } from '../common/dto/pagination.dto';
@@ -44,7 +47,11 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.acceptConnection(user.businessId, connectionId, body);
+    return this.connectionsService.acceptConnection(
+      user.businessId,
+      connectionId,
+      body,
+    );
   }
 
   @Patch(':id/reject')
@@ -55,7 +62,10 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.rejectConnection(user.businessId, connectionId);
+    return this.connectionsService.rejectConnection(
+      user.businessId,
+      connectionId,
+    );
   }
 
   @Get()
@@ -67,7 +77,11 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.getConnections(user.businessId, pagination, search);
+    return this.connectionsService.getConnections(
+      user.businessId,
+      pagination,
+      search,
+    );
   }
 
   @Patch(':id/block')
@@ -78,7 +92,10 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.blockConnection(user.businessId, connectionId);
+    return this.connectionsService.blockConnection(
+      user.businessId,
+      connectionId,
+    );
   }
 
   @Patch(':id/unblock')
@@ -89,7 +106,10 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.unblockConnection(user.businessId, connectionId);
+    return this.connectionsService.unblockConnection(
+      user.businessId,
+      connectionId,
+    );
   }
 
   @Post('manual-add')
@@ -114,18 +134,31 @@ export class ConnectionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.toggleShowPrices(user.businessId, connectionId, show);
+    return this.connectionsService.toggleShowPrices(
+      user.businessId,
+      connectionId,
+      show,
+    );
   }
 
   @Patch(':id/account-terms')
   async updateAccountTerms(
     @CurrentUser() user: any,
     @Param('id') connectionId: string,
-    @Body() body: { creditLimit?: number; billingCycle?: string; dueDate?: string | null },
+    @Body()
+    body: {
+      creditLimit?: number;
+      billingCycle?: string;
+      dueDate?: string | null;
+    },
   ) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.connectionsService.updateAccountTerms(user.businessId, connectionId, body);
+    return this.connectionsService.updateAccountTerms(
+      user.businessId,
+      connectionId,
+      body,
+    );
   }
 }
