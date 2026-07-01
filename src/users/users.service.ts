@@ -124,6 +124,25 @@ export class UsersService {
       },
     });
 
+    // Also update user's avatarUrl to keep profile image synchronized
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarUrl: logoUrl },
+    });
+
     return { url: business.logoUrl };
+  }
+
+  async updateUserAvatar(userId: string, avatarUrl: string) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarUrl },
+      select: {
+        id: true,
+        avatarUrl: true,
+      },
+    });
+
+    return { url: user.avatarUrl };
   }
 }

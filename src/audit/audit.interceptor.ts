@@ -63,10 +63,12 @@ export class AuditInterceptor implements NestInterceptor {
   }
 
   private resolveResource(path: string) {
-    const segment = path
-      .replace(/^\/api\/?/, '')
-      .replace(/^\//, '')
-      .split('/')[0];
+    // Strip '/api/v1/' or '/api/' prefix then take first meaningful segment
+    const cleaned = path
+      .replace(/\/api\/v\d+\//i, '/')
+      .replace(/\/api\//i, '/')
+      .replace(/^\//, '');
+    const segment = cleaned.split('/')[0];
     return (segment || 'SYSTEM').replace(/-/g, '_').toUpperCase();
   }
 }

@@ -97,7 +97,7 @@ export class UsersController {
     }),
   )
   async uploadLogo(@CurrentUser() user: any, @UploadedFile() file: any) {
-    return this.saveLogoFile(user.userId, file);
+    return this.saveLogoFile(user.userId, file, 'logo');
   }
 
   @Post('me/avatar')
@@ -125,10 +125,10 @@ export class UsersController {
     }),
   )
   async uploadAvatar(@CurrentUser() user: any, @UploadedFile() file: any) {
-    return this.saveLogoFile(user.userId, file);
+    return this.saveLogoFile(user.userId, file, 'avatar');
   }
 
-  private async saveLogoFile(userId: string, file: any) {
+  private async saveLogoFile(userId: string, file: any, type: 'logo' | 'avatar') {
     if (!file?.buffer || !file?.mimetype) {
       throw new BadRequestException('Logo file is required');
     }
@@ -144,6 +144,8 @@ export class UsersController {
     const projectId = process.env.SUPABASE_PROJECT_ID;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const bucket = process.env.SUPABASE_BUCKET || 'uploads';
+
+    let fileUrl: string;
 
     if (projectId && serviceKey) {
       try {
@@ -162,18 +164,20 @@ export class UsersController {
           throw new Error(`Supabase upload failed: ${response.statusText} - ${errText}`);
         }
 
-        const publicUrl = `https://${projectId}.supabase.co/storage/v1/object/public/${bucket}/${filename}`;
-        return this.usersService.updateBusinessLogo(userId, publicUrl);
+        fileUrl = `https://${projectId}.supabase.co/storage/v1/object/public/${bucket}/${filename}`;
       } catch (error: any) {
         throw new BadRequestException(`Failed to upload file to storage: ${error.message}`);
       }
     } else {
       ensureLogoUploadDir();
       await writeFile(join(logoUploadDir, filename), file.buffer);
-      return this.usersService.updateBusinessLogo(
-        userId,
-        `/uploads/logos/${filename}`,
-      );
+      fileUrl = `/uploads/logos/${filename}`;
+    }
+
+    if (type === 'logo') {
+      return this.usersService.updateBusinessLogo(userId, fileUrl);
+    } else {
+      return this.usersService.updateUserAvatar(userId, fileUrl);
     }
   }
 }
