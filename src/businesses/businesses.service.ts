@@ -71,11 +71,24 @@ export class BusinessesService {
             item.receiverId === currentBusinessId),
       );
 
+      let mappedConnection = null;
+      if (connection) {
+        const isRequester = connection.requesterId === currentBusinessId;
+        mappedConnection = {
+          ...connection,
+          connectionType: isRequester
+            ? connection.connectionType
+            : connection.connectionType === 'CUSTOMER'
+            ? 'SUPPLIER'
+            : 'CUSTOMER',
+        };
+      }
+
       return {
         ...business,
         ownerName: business.user.fullName,
         userType: business.user.userType,
-        connection,
+        connection: mappedConnection,
       };
     });
   }

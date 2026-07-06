@@ -136,10 +136,24 @@ export class ReportsService {
       payable: payable.toString(),
       ordersCount: orders.length,
       pendingOrdersCount: orders.filter((o) => o.status === 'PENDING').length,
-      customersCount: connections.filter((c) => c.connectionType === 'CUSTOMER')
-        .length,
-      suppliersCount: connections.filter((c) => c.connectionType === 'SUPPLIER')
-        .length,
+      customersCount: connections.filter((c) => {
+        const isRequester = c.requesterId === businessId;
+        const actualType = isRequester
+          ? c.connectionType
+          : c.connectionType === 'CUSTOMER'
+          ? 'SUPPLIER'
+          : 'CUSTOMER';
+        return actualType === 'CUSTOMER';
+      }).length,
+      suppliersCount: connections.filter((c) => {
+        const isRequester = c.requesterId === businessId;
+        const actualType = isRequester
+          ? c.connectionType
+          : c.connectionType === 'CUSTOMER'
+          ? 'SUPPLIER'
+          : 'CUSTOMER';
+        return actualType === 'SUPPLIER';
+      }).length,
       period: this.describePeriod(query, dateRange),
     };
   }

@@ -24,6 +24,26 @@ export class ConnectionsService {
     private readonly eventsGateway: EventsGateway,
   ) {}
 
+  private normalizeConnection(connection: any, businessId: string) {
+    if (!connection) return null;
+    const isRequester = connection.requesterId === businessId;
+    const result: any = {
+      ...connection,
+      connectionType: isRequester
+        ? connection.connectionType
+        : connection.connectionType === 'CUSTOMER'
+        ? 'SUPPLIER'
+        : 'CUSTOMER',
+      direction: isRequester ? 'SENT' : 'RECEIVED',
+    };
+
+    if (connection.receiver || connection.requester) {
+      result.business = isRequester ? connection.receiver : connection.requester;
+    }
+
+    return result;
+  }
+
   async createConnection(businessId: string, dto: CreateConnectionDto) {
     if (businessId === dto.receiverId) {
       throw new BadRequestException('لا يمكنك الارتباط بنفسك');
@@ -84,7 +104,7 @@ export class ConnectionsService {
         }
 
         // Reset to pending
-        return this.prisma.connection.update({
+        const updated = await this.prisma.connection.update({
           where: { id: connection.id },
           data: {
             status: 'PENDING',
@@ -94,7 +114,12 @@ export class ConnectionsService {
             retryCount: { increment: 1 },
             lastRequestedAt: new Date(),
           },
+          include: {
+            requester: true,
+            receiver: { include: { user: true } },
+          },
         });
+        return this.normalizeConnection(updated, businessId);
       }
     }
 
@@ -111,6 +136,8 @@ export class ConnectionsService {
         receiver: { include: { user: true } },
       },
     });
+
+    return this.normalizeConnection(newConnection, businessId);
 
     // 5. Send Notification
     await this.notificationsService.sendPushNotification(
@@ -255,7 +282,7 @@ export class ConnectionsService {
         },
       );
 
-      return updated;
+      return this.normalizeConnection(updated, businessId);
     });
   }
 
@@ -304,7 +331,7 @@ export class ConnectionsService {
       },
     );
 
-    return updated;
+    return this.normalizeConnection(updated, businessId);
   }
 
   async getConnections(
@@ -367,14 +394,9 @@ export class ConnectionsService {
       this.prisma.connection.count({ where }),
     ]);
 
-    const normalizedData = data.map((connection) => ({
-      ...connection,
-      business:
-        connection.requesterId === businessId
-          ? connection.receiver
-          : connection.requester,
-      direction: connection.requesterId === businessId ? 'SENT' : 'RECEIVED',
-    }));
+    const normalizedData = data.map((connection) =>
+      this.normalizeConnection(connection, businessId),
+    );
 
     return {
       data: normalizedData,
@@ -403,13 +425,19 @@ export class ConnectionsService {
       throw new BadRequestException('ليس لديك صلاحية على هذا الارتباط');
     }
 
-    return this.prisma.connection.update({
+    const updated = await this.prisma.connection.update({
       where: { id: connectionId },
       data: {
         status: 'BLOCKED',
         blockedById: businessId, // Record who blocked it
       },
+      include: {
+        requester: true,
+        receiver: true,
+      },
     });
+
+    return this.normalizeConnection(updated, businessId);
   }
 
   async unblockConnection(businessId: string, connectionId: string) {
@@ -431,13 +459,19 @@ export class ConnectionsService {
 
     // Unblocking moves connection back to PENDING as per user requirement
     // This requires the other party to re-accept explicitly.
-    return this.prisma.connection.update({
+    const updated = await this.prisma.connection.update({
       where: { id: connectionId },
       data: {
         status: 'PENDING',
         blockedById: null,
       },
+      include: {
+        requester: true,
+        receiver: true,
+      },
     });
+
+    return this.normalizeConnection(updated, businessId);
   }
 
   async toggleShowPrices(
@@ -460,10 +494,16 @@ export class ConnectionsService {
       throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
     }
 
-    return (this.prisma.connection as any).update({
+    const updated = await (this.prisma.connection as any).update({
       where: { id: connectionId },
       data: { showPrices: show },
+      include: {
+        requester: true,
+        receiver: true,
+      },
     });
+
+    return this.normalizeConnection(updated, businessId);
   }
   async manualAddConnection(myBusinessId: string, dto: ManualAddConnectionDto) {
     const {
@@ -532,7 +572,7 @@ export class ConnectionsService {
     }
 
     if (existing) {
-      return this.prisma.connection.update({
+      const updated = await this.prisma.connection.update({
         where: { id: existing.id },
         data: {
           status: 'ACCEPTED',
@@ -551,13 +591,18 @@ export class ConnectionsService {
           },
           ...(showPrices !== undefined && { showPrices }),
         },
+        include: {
+          requester: true,
+          receiver: true,
+        },
       });
+      return this.normalizeConnection(updated, myBusinessId);
     }
 
     const initialBalance = Number(openingBalance ?? 0);
     const accountCreditLimit = Number(creditLimit ?? 100000);
 
-    return this.prisma.connection.create({
+    const created = await this.prisma.connection.create({
       data: {
         requesterId: myBusinessId,
         receiverId: targetBusiness.id,
@@ -575,7 +620,13 @@ export class ConnectionsService {
           },
         },
       },
+      include: {
+        requester: true,
+        receiver: true,
+      },
     });
+
+    return this.normalizeConnection(created, myBusinessId);
   }
 
   async updateAccountTerms(
