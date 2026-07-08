@@ -1068,7 +1068,8 @@ export class AdminService {
     const where: any = {};
     if (userId) where.userId = userId;
     if (isRead !== undefined) {
-      where.isRead = isRead === 'true' || isRead === true;
+      const isReadVal = isRead as any;
+      where.isRead = isReadVal === 'true' || isReadVal === true;
     }
 
     const [notifications, total] = await Promise.all([
