@@ -14,4 +14,9 @@ export class UpdateProfileDto {
   @IsNotEmpty()
   @IsOptional()
   phoneNumber?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @IsOptional()
+  businessName?: string;
 }

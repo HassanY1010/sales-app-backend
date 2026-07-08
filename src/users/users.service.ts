@@ -34,9 +34,25 @@ export class UsersService {
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     this.logger.log(`Updating profile for user: ${userId}`);
+    const { businessName, ...userFields } = dto;
+
+    if (businessName) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { business: { select: { id: true } } },
+      });
+
+      if (user?.business?.id) {
+        await this.prisma.business.update({
+          where: { id: user.business.id },
+          data: { name: businessName.trim() },
+        });
+      }
+    }
+
     return this.prisma.user.update({
       where: { id: userId },
-      data: dto,
+      data: userFields,
       select: {
         id: true,
         email: true,

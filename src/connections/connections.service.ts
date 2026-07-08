@@ -137,13 +137,11 @@ export class ConnectionsService {
       },
     });
 
-    return this.normalizeConnection(newConnection, businessId);
-
-    // 5. Send Notification
+    // 5. Send Notification (using inverted type so receiver sees correct relationship)
     await this.notificationsService.sendPushNotification(
       newConnection.receiver.user.id,
       'طلب ارتباط جديد',
-      `يريد ${newConnection.requester.name} الارتباط بحسابك كـ ${dto.connectionType === 'SUPPLIER' ? 'مورد' : 'عميل'}`,
+      `يريد ${newConnection.requester.name} الارتباط بحسابك كـ ${dto.connectionType === 'SUPPLIER' ? 'عميل' : 'مورد'}`,
       { type: 'NEW_CONNECTION_REQUEST', connectionId: newConnection.id },
     );
 
@@ -153,11 +151,11 @@ export class ConnectionsService {
       {
         id: newConnection.id,
         requesterName: newConnection.requester.name,
-        connectionType: dto.connectionType,
+        connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
       },
     );
 
-    return newConnection;
+    return this.normalizeConnection(newConnection, businessId);
   }
 
   async acceptConnection(
@@ -572,11 +570,18 @@ export class ConnectionsService {
     }
 
     if (existing) {
+      const isRequester = existing.requesterId === myBusinessId;
+      const dbConnectionType = isRequester
+        ? connectionType
+        : connectionType === 'CUSTOMER'
+        ? 'SUPPLIER'
+        : 'CUSTOMER';
+
       const updated = await this.prisma.connection.update({
         where: { id: existing.id },
         data: {
           status: 'ACCEPTED',
-          connectionType: connectionType,
+          connectionType: dbConnectionType,
           account: {
             upsert: {
               create: { balance: 0, creditLimit: 100000 },
