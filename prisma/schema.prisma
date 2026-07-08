@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,194 +7,155 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole {
-  SUPER_ADMIN
-  ADMIN
-  SUPPORT
-  USER
-}
-
 model User {
-  id              String   @id @default(uuid())
-  email           String   @unique
-  password        String
-  fullName        String
-  phoneNumber     String   @unique // Mandatory and unique
-  securityPin     String? // 4-digit hashed code
-  avatarUrl       String?
-  userType        String   @default("individual") // individual, business
-  role            UserRole @default(USER)
-  pushToken       String?
-  isEmailVerified Boolean  @default(false)
-  isActive        Boolean  @default(true)
-  lastLoginAt     DateTime?
-
-  // Relations
-  business      Business?
-  notifications Notification[]
-  auditLogs     AuditLog[]
-  expenses      Expense[]
-  suggestions   Suggestion[]
-  adminActions  AdminAction[]
-  paymentRequests PaymentRequest[]
-  approvedPayments PaymentRequest[] @relation("ApprovedPayments")
-  subscriptions    UserSubscription[]
-  refreshTokens    RefreshToken[]
+  id                         String              @id @default(uuid())
+  email                      String              @unique
+  password                   String
+  fullName                   String
+  phoneNumber                String              @unique
+  securityPin                String?
+  avatarUrl                  String?
+  userType                   String              @default("individual")
+  role                       UserRole            @default(USER)
+  pushToken                  String?
+  isEmailVerified            Boolean             @default(false)
+  isActive                   Boolean             @default(true)
+  lastLoginAt                DateTime?
+  referredByAgentId          String?
+  referredAt                 DateTime?
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
   createdAdjustmentRequests  AdjustmentRequest[] @relation("AdjustmentCreatedBy")
   reviewedAdjustmentRequests AdjustmentRequest[] @relation("AdjustmentReviewedBy")
-
-  referredByAgentId String?
-  referredByAgent   Agent?    @relation("ReferredUsers", fields: [referredByAgentId], references: [id], onDelete: SetNull)
-  referredAt        DateTime?
-  agentProfile      Agent?    @relation("UserToAgent")
-  commissions       Commission[] @relation("CustomerCommissions")
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  adminActions               AdminAction[]
+  agentProfile               Agent?              @relation("UserToAgent")
+  auditLogs                  AuditLog[]
+  business                   Business?
+  commissions                Commission[]        @relation("CustomerCommissions")
+  expenses                   Expense[]
+  notifications              Notification[]
+  approvedPayments           PaymentRequest[]    @relation("ApprovedPayments")
+  paymentRequests            PaymentRequest[]
+  refreshTokens              RefreshToken[]
+  suggestions                Suggestion[]
+  subscriptions              UserSubscription[]
+  referredByAgent            Agent?              @relation("ReferredUsers", fields: [referredByAgentId], references: [id])
 
   @@map("users")
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   revokedAt DateTime?
   userAgent String?
   ipAddress String?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@index([userId], name: "refresh_tokens_user_idx")
-  @@index([expiresAt], name: "refresh_tokens_expires_idx")
+  @@index([userId], map: "refresh_tokens_user_idx")
+  @@index([expiresAt], map: "refresh_tokens_expires_idx")
   @@map("refresh_tokens")
 }
 
 model Business {
-  id           String  @id @default(uuid())
-  name         String
-  businessType String? // Retail, Wholesale, etc.
-  phoneNumber  String?
-  email        String?
-  address      String? @db.Text
-  logoUrl      String?
-  userId       String  @unique
-
-  // Relations
-  user User @relation(fields: [userId], references: [id])
-
-  // Connections where this business is the requester or receiver
-  sentConnections     Connection[] @relation("Requester")
-  receivedConnections Connection[] @relation("Receiver")
-
-  // Transactions
-  sentTransactions     Transaction[] @relation("TransactionSender")
-  receivedTransactions Transaction[] @relation("TransactionReceiver")
-
-  // Orders
-  sentOrders     Order[] @relation("OrderSender")
-  receivedOrders Order[] @relation("OrderReceiver")
-
-  subscriptionStatus String   @default("FREE") // FREE, GOLD, EXPIRED
-  subscriptionExpiry DateTime?
-  
-  paymentRequests PaymentRequest[]
-  subscriptions    UserSubscription[]
+  id                    String                 @id @default(uuid())
+  name                  String
+  businessType          String?
+  phoneNumber           String?
+  email                 String?
+  address               String?
+  logoUrl               String?
+  userId                String                 @unique
+  subscriptionStatus    String                 @default("FREE")
+  subscriptionExpiry    DateTime?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  receivedAdjustments   AdjustmentRequest[]    @relation("AdjustmentReceiver")
+  requestedAdjustments  AdjustmentRequest[]    @relation("AdjustmentRequester")
+  user                  User                   @relation(fields: [userId], references: [id])
   cloudBackupCredential CloudBackupCredential?
   cloudBackupRecords    CloudBackupRecord[]
-  requestedAdjustments  AdjustmentRequest[] @relation("AdjustmentRequester")
-  receivedAdjustments   AdjustmentRequest[] @relation("AdjustmentReceiver")
+  receivedConnections   Connection[]           @relation("Receiver")
+  sentConnections       Connection[]           @relation("Requester")
   dueReminderLogs       DueReminderLog[]
   expenses              Expense[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  receivedOrders        Order[]                @relation("OrderReceiver")
+  sentOrders            Order[]                @relation("OrderSender")
+  paymentRequests       PaymentRequest[]
+  receivedTransactions  Transaction[]          @relation("TransactionReceiver")
+  sentTransactions      Transaction[]          @relation("TransactionSender")
+  subscriptions         UserSubscription[]
 
   @@map("businesses")
 }
 
 model Connection {
-  id             String @id @default(uuid())
-  requesterId    String
-  receiverId     String
-  status         String @default("PENDING") // PENDING, ACCEPTED, REJECTED, BLOCKED
-  connectionType String @default("CUSTOMER") // CUSTOMER, SUPPLIER (From requester perspective)
-
-  // Relations
-  requester Business @relation("Requester", fields: [requesterId], references: [id])
-  receiver  Business @relation("Receiver", fields: [receiverId], references: [id])
-
-  // Financial Account summary between these two businesses
-  account Account?
-
-  // State Machine helper fields
-  showPrices      Boolean  @default(false)
+  id              String    @id @default(uuid())
+  requesterId     String
+  receiverId      String
+  status          String    @default("PENDING")
+  connectionType  String    @default("CUSTOMER")
+  showPrices      Boolean   @default(false)
   blockedById     String?
   lastRequestedAt DateTime? @default(now())
   retryCount      Int       @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  account         Account?
+  receiver        Business  @relation("Receiver", fields: [receiverId], references: [id])
+  requester       Business  @relation("Requester", fields: [requesterId], references: [id])
 
   @@unique([requesterId, receiverId])
   @@map("connections")
 }
 
 model Account {
-  id           String  @id @default(uuid())
-  connectionId String  @unique
-  balance      Decimal @default(0.00) @db.Decimal(15, 2)
-  totalCredit  Decimal @default(0.00) @db.Decimal(15, 2) // له
-  totalDebit   Decimal @default(0.00) @db.Decimal(15, 2) // عليه
-  creditLimit  Decimal @default(100000) @db.Decimal(15, 2) // سقف المديونية
-  billingCycle String? // WEEKLY, MONTHLY, etc.
-  currency     String  @default("YER")
+  id           String     @id @default(uuid())
+  connectionId String     @unique
+  balance      Decimal    @default(0.00) @db.Decimal(15, 2)
+  totalCredit  Decimal    @default(0.00) @db.Decimal(15, 2)
+  totalDebit   Decimal    @default(0.00) @db.Decimal(15, 2)
+  creditLimit  Decimal    @default(100000) @db.Decimal(15, 2)
+  billingCycle String?
+  currency     String     @default("YER")
   dueDate      DateTime?
-
-  // Relations
-  connection Connection @relation(fields: [connectionId], references: [id])
-
-  updatedAt DateTime @updatedAt
+  updatedAt    DateTime   @updatedAt
+  connection   Connection @relation(fields: [connectionId], references: [id])
 
   @@map("accounts")
 }
 
 model Order {
-  id          String @id @default(uuid())
-  orderNumber String @unique
-  senderId    String
-  receiverId  String
-  status      String @default("PENDING") // PENDING, ACCEPTED, REJECTED, COMPLETED, CANCELLED
-  isCash      Boolean @default(false) // Cash or Credit order (نقدي / آجل)
-  currency    String @default("YER")
-  dueDate     DateTime?
-  pricesVisible Boolean @default(true)
+  id              String        @id @default(uuid())
+  orderNumber     String        @unique
+  senderId        String
+  receiverId      String
+  status          String        @default("PENDING")
+  isCash          Boolean       @default(false)
+  currency        String        @default("YER")
+  dueDate         DateTime?
+  pricesVisible   Boolean       @default(true)
   priceAcceptedAt DateTime?
-
-  subtotal Decimal @default(0.00) @db.Decimal(15, 2)
-  tax      Decimal @default(0.00) @db.Decimal(15, 2)
-  discount Decimal @default(0.00) @db.Decimal(15, 2)
-  paidAmount Decimal @default(0.00) @db.Decimal(15, 2)
-  total    Decimal @default(0.00) @db.Decimal(15, 2)
-
-  notes           String? @db.Text
-  rejectionReason String? @db.Text
+  subtotal        Decimal       @default(0.00) @db.Decimal(15, 2)
+  tax             Decimal       @default(0.00) @db.Decimal(15, 2)
+  discount        Decimal       @default(0.00) @db.Decimal(15, 2)
+  paidAmount      Decimal       @default(0.00) @db.Decimal(15, 2)
+  total           Decimal       @default(0.00) @db.Decimal(15, 2)
+  notes           String?
+  rejectionReason String?
   rejectedById    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  items           OrderItem[]
+  receiver        Business      @relation("OrderReceiver", fields: [receiverId], references: [id])
+  sender          Business      @relation("OrderSender", fields: [senderId], references: [id])
+  transactions    Transaction[]
 
-  // Relations
-  sender       Business      @relation("OrderSender", fields: [senderId], references: [id])
-  receiver     Business      @relation("OrderReceiver", fields: [receiverId], references: [id])
-  items        OrderItem[]
-  transactions Transaction[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([status], name: "orders_status_idx")
-  @@index([createdAt], name: "orders_created_at_idx")
+  @@index([status])
+  @@index([createdAt], map: "orders_created_at_idx")
   @@map("orders")
 }
 
@@ -205,66 +163,58 @@ model OrderItem {
   id          String  @id @default(uuid())
   orderId     String
   itemName    String
-  description String? @db.Text
+  description String?
   quantity    Int     @default(1)
   unitPrice   Decimal @db.Decimal(15, 2)
   total       Decimal @db.Decimal(15, 2)
-  unit        String? // kg, piece, etc.
-
-  // Relations
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  unit        String?
+  order       Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("order_items")
 }
 
 model Transaction {
-  id              String  @id @default(uuid())
-  transactionType String // PAYMENT, SALE, PURCHASE, ADJUSTMENT
+  id              String    @id @default(uuid())
+  transactionType String
   voucherNumber   String?
-  amount          Decimal @db.Decimal(15, 2)
-  currency        String  @default("YER")
+  amount          Decimal   @db.Decimal(15, 2)
+  currency        String    @default("YER")
   dueDate         DateTime?
   attachmentUrl   String?
-  balanceAfter    Decimal? @db.Decimal(15, 2)
+  balanceAfter    Decimal?  @db.Decimal(15, 2)
   senderId        String
   receiverId      String
   orderId         String?
-  note            String? @db.Text
+  note            String?
   paymentMethod   String?
   transferNumber  String?
+  createdAt       DateTime  @default(now())
+  order           Order?    @relation(fields: [orderId], references: [id])
+  receiver        Business  @relation("TransactionReceiver", fields: [receiverId], references: [id])
+  sender          Business  @relation("TransactionSender", fields: [senderId], references: [id])
 
-  // Relations
-  sender   Business @relation("TransactionSender", fields: [senderId], references: [id])
-  receiver Business @relation("TransactionReceiver", fields: [receiverId], references: [id])
-  order    Order?   @relation(fields: [orderId], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@index([createdAt], name: "transactions_created_at_idx")
+  @@index([createdAt], map: "transactions_created_at_idx")
   @@map("transactions")
 }
 
 model Notification {
-  id     String  @id @default(uuid())
-  userId String
-  title  String
-  body   String  @db.Text
-  type   String? // ORDER_UPDATE, NEW_CONNECTION, PAYMENT_RECEIVED
-  isRead Boolean @default(false)
-
-  // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  body      String
+  type      String?
+  isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
 }
 
 model AuditLog {
-  id         String  @id @default(uuid())
+  id         String   @id @default(uuid())
   userId     String?
-  action     String // CREATE, UPDATE, DELETE, LOGIN
-  resource   String // ORDER, USER, CONNECTION
+  action     String
+  resource   String
   resourceId String?
   details    Json?
   ipAddress  String?
@@ -272,30 +222,25 @@ model AuditLog {
   path       String?
   statusCode Int?
   businessId String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id])
 
-  // Relations
-  user User? @relation(fields: [userId], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@index([businessId], name: "audit_logs_business_idx")
-  @@index([createdAt], name: "audit_logs_created_at_idx")
+  @@index([businessId], map: "audit_logs_business_idx")
+  @@index([createdAt], map: "audit_logs_created_at_idx")
   @@map("audit_logs")
 }
 
 model CloudBackupCredential {
-  id           String   @id @default(uuid())
-  businessId   String   @unique
-  provider     String   @default("GOOGLE_DRIVE")
-  refreshToken String   @db.Text
+  id           String    @id @default(uuid())
+  businessId   String    @unique
+  provider     String    @default("GOOGLE_DRIVE")
+  refreshToken String
   email        String?
   scope        String?
   expiresAt    DateTime?
-
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
   @@map("cloud_backup_credentials")
 }
@@ -309,49 +254,41 @@ model CloudBackupRecord {
   fileSize   Int?
   checksum   String?
   status     String   @default("UPLOADED")
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@index([businessId], name: "cloud_backup_records_business_idx")
+  @@index([businessId], map: "cloud_backup_records_business_idx")
   @@map("cloud_backup_records")
 }
 
 model Expense {
-  id          String   @id @default(uuid())
-  amount      Decimal  @db.Decimal(15, 2)
-  description String   @db.Text
-  date        DateTime @default(now())
-  
+  id          String    @id @default(uuid())
+  amount      Decimal   @db.Decimal(15, 2)
+  description String
+  date        DateTime  @default(now())
   userId      String
   businessId  String?
-
-  // Relations
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("expenses")
 }
 
 model AdminAction {
-  id          String   @id @default(uuid())
-  adminId     String
-  action      String   // TOGGLE_USER_STATUS, CHANGE_ROLE, DELETE_BUSINESS, etc.
-  targetType  String   // USER, BUSINESS, ORDER, etc.
-  targetId    String?
-  details     Json?
-  ipAddress   String?
+  id         String   @id @default(uuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String?
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+  admin      User     @relation(fields: [adminId], references: [id])
 
-  admin       User     @relation(fields: [adminId], references: [id])
-
-  createdAt   DateTime @default(now())
-
-  @@index([adminId], name: "admin_actions_admin_idx")
-  @@index([createdAt], name: "admin_actions_created_at_idx")
+  @@index([adminId], map: "admin_actions_admin_idx")
+  @@index([createdAt], map: "admin_actions_created_at_idx")
   @@map("admin_actions")
 }
 
@@ -360,52 +297,49 @@ model SystemSettings {
   key       String   @unique
   value     Json
   isPublic  Boolean  @default(false)
-  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("system_settings")
 }
+
 model Suggestion {
   id        String   @id @default(uuid())
   userId    String
-  content   String   @db.Text
+  content   String
   whatsapp  String?
-  status    String   @default("OPEN") // OPEN, REVIEWED, CLOSED
-  
-  user      User     @relation(fields: [userId], references: [id])
+  status    String   @default("OPEN")
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 
   @@map("suggestions")
 }
 
 model AdjustmentRequest {
-  id                  String   @id @default(uuid())
+  id                  String    @id @default(uuid())
   requesterBusinessId String
   receiverBusinessId  String
   targetType          String
   targetId            String
-  requestedAmount     Decimal? @db.Decimal(15, 2)
+  requestedAmount     Decimal?  @db.Decimal(15, 2)
   requestedDueDate    DateTime?
-  requestedNote       String?  @db.Text
-  reason              String   @db.Text
-  status              String   @default("PENDING")
-  rejectionReason     String?  @db.Text
+  requestedNote       String?
+  reason              String
+  status              String    @default("PENDING")
+  rejectionReason     String?
   createdById         String
   reviewedById        String?
   reviewedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  createdBy           User      @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
+  receiverBusiness    Business  @relation("AdjustmentReceiver", fields: [receiverBusinessId], references: [id])
+  requesterBusiness   Business  @relation("AdjustmentRequester", fields: [requesterBusinessId], references: [id])
+  reviewedBy          User?     @relation("AdjustmentReviewedBy", fields: [reviewedById], references: [id])
 
-  requesterBusiness Business @relation("AdjustmentRequester", fields: [requesterBusinessId], references: [id])
-  receiverBusiness  Business @relation("AdjustmentReceiver", fields: [receiverBusinessId], references: [id])
-  createdBy         User     @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
-  reviewedBy        User?    @relation("AdjustmentReviewedBy", fields: [reviewedById], references: [id])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([requesterBusinessId], name: "adjustment_requests_requester_idx")
-  @@index([receiverBusinessId], name: "adjustment_requests_receiver_idx")
-  @@index([targetType, targetId], name: "adjustment_requests_target_idx")
+  @@index([requesterBusinessId], map: "adjustment_requests_requester_idx")
+  @@index([receiverBusinessId], map: "adjustment_requests_receiver_idx")
+  @@index([targetType, targetId], map: "adjustment_requests_target_idx")
   @@map("adjustment_requests")
 }
 
@@ -418,15 +352,155 @@ model DueReminderLog {
   dueDate             DateTime
   amount              Decimal  @db.Decimal(15, 2)
   direction           String
-
-  recipientBusiness Business @relation(fields: [recipientBusinessId], references: [id])
-
-  createdAt DateTime @default(now())
+  createdAt           DateTime @default(now())
+  recipientBusiness   Business @relation(fields: [recipientBusinessId], references: [id])
 
   @@unique([connectionId, recipientBusinessId, reminderDate], name: "due_reminder_once_per_day")
-  @@index([recipientBusinessId], name: "due_reminder_logs_recipient_idx")
-  @@index([dueDate], name: "due_reminder_logs_due_date_idx")
+  @@index([recipientBusinessId], map: "due_reminder_logs_recipient_idx")
+  @@index([dueDate], map: "due_reminder_logs_due_date_idx")
   @@map("due_reminder_logs")
+}
+
+model PaymentRequest {
+  id           String               @id @default(uuid())
+  userId       String
+  businessId   String?
+  amount       Decimal              @db.Decimal(15, 2)
+  wallet       String
+  status       PaymentRequestStatus @default(PENDING)
+  notes        String?
+  receiptUrl   String?
+  approvedById String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  commissions  Commission[]
+  approvedBy   User?                @relation("ApprovedPayments", fields: [approvedById], references: [id])
+  business     Business?            @relation(fields: [businessId], references: [id])
+  user         User                 @relation(fields: [userId], references: [id])
+
+  @@map("payment_requests")
+}
+
+model SubscriptionPlan {
+  id            String             @id @default(uuid())
+  name          String
+  description   String?
+  price         Decimal            @db.Decimal(15, 2)
+  durationDays  Int                @default(365)
+  features      Json?
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  subscriptions UserSubscription[]
+
+  @@map("subscription_plans")
+}
+
+model UserSubscription {
+  id          String             @id @default(uuid())
+  userId      String
+  businessId  String?
+  planId      String
+  status      SubscriptionStatus @default(FREE)
+  expiryDate  DateTime?
+  autoRenew   Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  commissions Commission[]
+  business    Business?          @relation(fields: [businessId], references: [id])
+  plan        SubscriptionPlan   @relation(fields: [planId], references: [id])
+  user        User               @relation(fields: [userId], references: [id])
+
+  @@map("user_subscriptions")
+}
+
+model Region {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  agents    Agent[]
+
+  @@map("regions")
+}
+
+model Agent {
+  id              String             @id @default(uuid())
+  userId          String             @unique
+  referralCode    String             @unique
+  regionId        String?
+  commissionType  CommissionType     @default(PERCENTAGE)
+  commissionValue Decimal            @default(10.00) @db.Decimal(15, 2)
+  status          AgentStatus        @default(ACTIVE)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  region          Region?            @relation(fields: [regionId], references: [id])
+  user            User               @relation("UserToAgent", fields: [userId], references: [id], onDelete: Cascade)
+  payouts         CommissionPayout[]
+  commissions     Commission[]
+  referredUsers   User[]             @relation("ReferredUsers")
+
+  @@map("agents")
+}
+
+model Commission {
+  id               String            @id @default(uuid())
+  agentId          String
+  customerId       String
+  subscriptionId   String?
+  paymentRequestId String?
+  amount           Decimal           @db.Decimal(15, 2)
+  status           CommissionStatus  @default(PENDING)
+  notes            String?
+  payoutId         String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  agent            Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  customer         User              @relation("CustomerCommissions", fields: [customerId], references: [id])
+  paymentRequest   PaymentRequest?   @relation(fields: [paymentRequestId], references: [id])
+  payout           CommissionPayout? @relation(fields: [payoutId], references: [id])
+  subscription     UserSubscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([agentId], map: "commission_agent_idx")
+  @@index([status], map: "commission_status_idx")
+  @@map("commissions")
+}
+
+model CommissionPayout {
+  id          String       @id @default(uuid())
+  agentId     String
+  totalAmount Decimal      @db.Decimal(15, 2)
+  status      PayoutStatus @default(PENDING)
+  paidAt      DateTime?
+  receiptUrl  String?
+  notes       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  agent       Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  commissions Commission[]
+
+  @@index([agentId], map: "payout_agent_idx")
+  @@map("commission_payouts")
+}
+
+model ActivationCode {
+  id           String    @id @default(uuid())
+  code         String    @unique
+  durationDays Int       @default(365)
+  isUsed       Boolean   @default(false)
+  usedByUserId String?
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("activation_codes")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  SUPPORT
+  USER
 }
 
 enum SubscriptionStatus {
@@ -441,79 +515,6 @@ enum PaymentRequestStatus {
   REJECTED
 }
 
-model PaymentRequest {
-  id          String                @id @default(uuid())
-  userId      String
-  businessId  String?
-  amount      Decimal               @db.Decimal(15, 2)
-  wallet      String                // Jawali, Cash, etc.
-  status      PaymentRequestStatus  @default(PENDING)
-  notes       String?               @db.Text
-  receiptUrl  String?
-  
-  user        User                  @relation(fields: [userId], references: [id])
-  business    Business?             @relation(fields: [businessId], references: [id])
-  
-  approvedById String?
-  approvedBy   User?                 @relation("ApprovedPayments", fields: [approvedById], references: [id])
-  
-  commissions Commission[]
-
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
-
-  @@map("payment_requests")
-}
-
-model SubscriptionPlan {
-  id              String   @id @default(uuid())
-  name            String
-  description     String?
-  price           Decimal  @db.Decimal(15, 2)
-  durationDays    Int      @default(365)
-  features        Json?
-  isActive        Boolean  @default(true)
-  
-  subscriptions   UserSubscription[]
-
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@map("subscription_plans")
-}
-
-model UserSubscription {
-  id              String   @id @default(uuid())
-  userId          String
-  businessId      String?
-  planId          String
-  status          SubscriptionStatus @default(FREE)
-  expiryDate      DateTime?
-  autoRenew       Boolean @default(false)
-  
-  user            User     @relation(fields: [userId], references: [id])
-  business        Business? @relation(fields: [businessId], references: [id])
-  plan            SubscriptionPlan @relation(fields: [planId], references: [id])
-  
-  commissions     Commission[]
-
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@map("user_subscriptions")
-}
-
-model Region {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  agents    Agent[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("regions")
-}
-
 enum CommissionType {
   PERCENTAGE
   FIXED
@@ -526,27 +527,6 @@ enum AgentStatus {
   BLOCKED
 }
 
-model Agent {
-  id             String         @id @default(uuid())
-  userId         String         @unique
-  referralCode   String         @unique
-  regionId       String?
-  commissionType CommissionType @default(PERCENTAGE)
-  commissionValue Decimal        @default(10.00) @db.Decimal(15, 2)
-  status         AgentStatus    @default(ACTIVE)
-  
-  user           User           @relation("UserToAgent", fields: [userId], references: [id], onDelete: Cascade)
-  region         Region?        @relation(fields: [regionId], references: [id], onDelete: SetNull)
-  referredUsers  User[]         @relation("ReferredUsers")
-  commissions    Commission[]
-  payouts        CommissionPayout[]
-
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-
-  @@map("agents")
-}
-
 enum CommissionStatus {
   PENDING
   APPROVED
@@ -554,65 +534,7 @@ enum CommissionStatus {
   REJECTED
 }
 
-model Commission {
-  id               String           @id @default(uuid())
-  agentId          String
-  customerId       String
-  subscriptionId   String?
-  paymentRequestId String?
-  amount           Decimal          @db.Decimal(15, 2)
-  status           CommissionStatus @default(PENDING)
-  notes            String?          @db.Text
-  payoutId         String?
-
-  agent            Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  customer         User             @relation("CustomerCommissions", fields: [customerId], references: [id])
-  subscription     UserSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  paymentRequest   PaymentRequest?  @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
-  payout           CommissionPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
-
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-
-  @@index([agentId], name: "commission_agent_idx")
-  @@index([status], name: "commission_status_idx")
-  @@map("commissions")
-}
-
 enum PayoutStatus {
   PENDING
   PAID
-}
-
-model CommissionPayout {
-  id          String       @id @default(uuid())
-  agentId     String
-  totalAmount Decimal      @db.Decimal(15, 2)
-  status      PayoutStatus @default(PENDING)
-  paidAt      DateTime?
-  receiptUrl  String?
-  notes       String?      @db.Text
-  
-  agent       Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  commissions Commission[]
-
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  @@index([agentId], name: "payout_agent_idx")
-  @@map("commission_payouts")
-}
-
-model ActivationCode {
-  id           String    @id @default(uuid())
-  code         String    @unique
-  durationDays Int       @default(365)
-  isUsed       Boolean   @default(false)
-  usedByUserId String?
-  usedAt       DateTime?
-
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  @@map("activation_codes")
 }
