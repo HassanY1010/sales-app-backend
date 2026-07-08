@@ -161,4 +161,25 @@ export class ConnectionsController {
       body,
     );
   }
+
+  @Patch(':id')
+  async updateContactInfo(
+    @CurrentUser() user: any,
+    @Param('id') connectionId: string,
+    @Body()
+    body: {
+      phoneNumber?: string;
+      ownerName?: string;
+      notes?: string;
+    },
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.connectionsService.updateContactInfo(
+      user.businessId,
+      connectionId,
+      body,
+    );
+  }
 }

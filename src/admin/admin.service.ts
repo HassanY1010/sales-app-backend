@@ -1067,7 +1067,9 @@ export class AdminService {
 
     const where: any = {};
     if (userId) where.userId = userId;
-    if (isRead !== undefined) where.isRead = isRead;
+    if (isRead !== undefined) {
+      where.isRead = isRead === 'true' || isRead === true;
+    }
 
     const [notifications, total] = await Promise.all([
       this.prisma.notification.findMany({

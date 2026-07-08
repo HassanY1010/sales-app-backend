@@ -343,13 +343,21 @@ export class ConnectionsService {
     };
 
     if (search) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(search.trim());
       where.AND = [
         {
           OR: [
-            { requester: { name: { contains: search } } },
-            { receiver: { name: { contains: search } } },
+            ...(isUuid ? [
+              { id: { equals: search.trim() } },
+              { requesterId: { equals: search.trim() } },
+              { receiverId: { equals: search.trim() } },
+            ] : []),
+            { requester: { name: { contains: search, mode: 'insensitive' } } },
+            { receiver: { name: { contains: search, mode: 'insensitive' } } },
             { requester: { phoneNumber: { contains: search } } },
             { receiver: { phoneNumber: { contains: search } } },
+            { requester: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
+            { receiver: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
           ],
         },
       ];
@@ -696,4 +704,76 @@ export class ConnectionsService {
 
     return updated;
   }
+
+  async updateContactInfo(
+    myBusinessId: string,
+    connectionId: string,
+    dto: {
+      phoneNumber?: string;
+      ownerName?: string;
+      notes?: string;
+    },
+  ) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id: connectionId },
+      include: {
+        requester: { include: { user: true } },
+        receiver: { include: { user: true } },
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    if (
+      connection.requesterId !== myBusinessId &&
+      connection.receiverId !== myBusinessId
+    ) {
+      throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
+    }
+
+    const isRequester = connection.requesterId === myBusinessId;
+    const targetBusiness = isRequester ? connection.receiver : connection.requester;
+
+    // Update connection notes
+    await this.prisma.connection.update({
+      where: { id: connectionId },
+      data: {
+        ...(dto.notes !== undefined && { notes: dto.notes }),
+      },
+    });
+
+    // If target business is a Shadow/manual business, we can update its phone number and user ownerName
+    if (targetBusiness && (targetBusiness.businessType === 'Shadow' || (targetBusiness.user && !targetBusiness.user.isActive))) {
+      await this.prisma.business.update({
+        where: { id: targetBusiness.id },
+        data: {
+          ...(dto.phoneNumber && { phoneNumber: dto.phoneNumber }),
+        },
+      });
+
+      if (targetBusiness.user) {
+        await this.prisma.user.update({
+          where: { id: targetBusiness.user.id },
+          data: {
+            ...(dto.phoneNumber && { phoneNumber: dto.phoneNumber }),
+            ...(dto.ownerName && { fullName: dto.ownerName }),
+          },
+        });
+      }
+    }
+
+    const finalConnection = await this.prisma.connection.findFirst({
+      where: { id: connectionId },
+      include: {
+        requester: { include: { user: true } },
+        receiver: { include: { user: true } },
+        account: true,
+      },
+    });
+
+    return this.normalizeConnection(finalConnection, myBusinessId);
+  }
 }
+
