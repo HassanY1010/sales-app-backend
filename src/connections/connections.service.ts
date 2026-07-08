@@ -737,29 +737,37 @@ export class ConnectionsService {
     const targetBusiness = isRequester ? connection.receiver : connection.requester;
 
     // Update connection notes
+    const connectionUpdateData: any = {};
+    if (dto.notes !== undefined) {
+      connectionUpdateData.notes = dto.notes;
+    }
     await this.prisma.connection.update({
       where: { id: connectionId },
-      data: {
-        ...(dto.notes !== undefined && { notes: dto.notes }),
-      },
+      data: connectionUpdateData,
     });
 
     // If target business is a Shadow/manual business, we can update its phone number and user ownerName
     if (targetBusiness && (targetBusiness.businessType === 'Shadow' || (targetBusiness.user && !targetBusiness.user.isActive))) {
+      const businessUpdateData: any = {};
+      if (dto.phoneNumber) {
+        businessUpdateData.phoneNumber = dto.phoneNumber;
+      }
       await this.prisma.business.update({
         where: { id: targetBusiness.id },
-        data: {
-          ...(dto.phoneNumber && { phoneNumber: dto.phoneNumber }),
-        },
+        data: businessUpdateData,
       });
 
       if (targetBusiness.user) {
+        const userUpdateData: any = {};
+        if (dto.phoneNumber) {
+          userUpdateData.phoneNumber = dto.phoneNumber;
+        }
+        if (dto.ownerName) {
+          userUpdateData.fullName = dto.ownerName;
+        }
         await this.prisma.user.update({
           where: { id: targetBusiness.user.id },
-          data: {
-            ...(dto.phoneNumber && { phoneNumber: dto.phoneNumber }),
-            ...(dto.ownerName && { fullName: dto.ownerName }),
-          },
+          data: userUpdateData,
         });
       }
     }
