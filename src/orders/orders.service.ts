@@ -292,12 +292,15 @@ export class OrdersService {
         });
       }
 
+      const paidAmount = new Decimal(dto.paidAmount || order.paidAmount as any || '0');
+
       await prisma.order.update({
         where: { id: orderId },
         data: {
           subtotal: subtotal.toString(),
           tax: tax.toString(),
           discount: discount.toString(),
+          paidAmount: paidAmount.toString(),
           total: subtotal.plus(tax).minus(discount).toString(),
           currency: dto.currency || order.currency,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : order.dueDate,

@@ -244,30 +244,48 @@ export class AdminService {
     return updated;
   }
 
-  async resetUserPassword(userId: string, adminId: string) {
+  async resetUserPassword(userId: string, adminId: string, dto?: any) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('المستخدم غير موجود');
     }
 
-    const temporaryPassword = this.generateTemporaryPassword();
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+    const forcePasswordChange = dto?.forcePasswordChange !== false;
+    const expiryHours = dto?.expiryHours || 24;
+    
+    let temporaryPassword = dto?.customPassword || this.generateTemporaryPassword();
+    if (temporaryPassword.length < 6) {
+      throw new BadRequestException('كلمة المرور المؤقتة يجب ألا تقل عن 6 خانات');
+    }
+    
+    const hashedTempPassword = await bcrypt.hash(temporaryPassword, 10);
+    const expiryDate = new Date();
+    expiryDate.setHours(expiryDate.getHours() + expiryHours);
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword },
+      data: {
+        tempPasswordHash: hashedTempPassword,
+        tempPasswordExpiry: expiryDate,
+        forcePasswordChange: forcePasswordChange,
+        passwordResetCount: { increment: 1 },
+        lastPasswordResetAt: new Date(),
+        lastPasswordResetById: adminId,
+      },
     });
+
     await this.prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
 
-    await this.logAdminAction(adminId, 'RESET_USER_PASSWORD', 'USER', userId, {
-      message:
-        'Password reset to temporary password and active sessions revoked',
+    await this.logAdminAction(adminId, 'RESET_USER_PASSWORD_ADVANCED', 'USER', userId, {
+      forcePasswordChange,
+      expiryHours,
+      resetById: adminId,
     });
 
-    return { success: true, temporaryPassword };
+    return { success: true, temporaryPassword, expiryDate };
   }
 
   async deleteUser(userId: string, adminId: string) {

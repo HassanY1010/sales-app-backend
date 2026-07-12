@@ -150,6 +150,7 @@ export class ConnectionsController {
       creditLimit?: number;
       billingCycle?: string;
       dueDate?: string | null;
+      openingBalance?: number;
     },
   ) {
     if (!user.businessId) {

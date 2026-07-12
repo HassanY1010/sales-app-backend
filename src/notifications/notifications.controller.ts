@@ -190,8 +190,11 @@ export class NotificationsController {
     const skipped = [];
 
     for (const connection of connections) {
-      const balance = Number(connection.account?.balance ?? 0);
-      if (balance >= 0) {
+      const isRequester = connection.requesterId === user.businessId;
+      const dbBalance = Number(connection.account?.balance ?? 0);
+      const normalizedBalance = isRequester ? dbBalance : -dbBalance;
+
+      if (normalizedBalance <= 0) {
         skipped.push({
           connectionId: connection.id,
           reason: 'لا يوجد رصيد مدين على هذا العميل',
@@ -199,10 +202,9 @@ export class NotificationsController {
         continue;
       }
 
-      const targetBusiness =
-        connection.requesterId === user.businessId
-          ? connection.receiver
-          : connection.requester;
+      const targetBusiness = isRequester
+        ? connection.receiver
+        : connection.requester;
 
       const notification = await this.notificationsService.notifyUser(
         targetBusiness.userId,
@@ -212,7 +214,7 @@ export class NotificationsController {
           type: 'DEBTOR_ALERT',
           connectionId: connection.id,
           senderBusinessId: user.businessId,
-          balance: Math.abs(balance).toString(),
+          balance: normalizedBalance.toString(),
         },
       );
 

@@ -27,7 +27,7 @@ export class CommissionsService {
   ) {
     const user = await tx.user.findUnique({
       where: { id: userId },
-      select: { referredByAgentId: true },
+      select: { referredByAgentId: true, fullName: true },
     });
 
     if (!user || !user.referredByAgentId) {
@@ -36,8 +36,17 @@ export class CommissionsService {
 
     const agentId = user.referredByAgentId;
 
+    // Prevent duplicates: Check if a commission for this payment already exists
+    const existing = await tx.commission.findFirst({
+      where: { paymentRequestId },
+    });
+    if (existing) {
+      return existing; // Skip processing and return existing commission record
+    }
+
     const agent = await tx.agent.findUnique({
       where: { id: agentId },
+      include: { user: { select: { fullName: true } } },
     });
 
     if (!agent || agent.status !== 'ACTIVE') {
@@ -46,12 +55,29 @@ export class CommissionsService {
 
     // 1. Calculate amount
     let amount = new Prisma.Decimal(0);
+    const commissionPercentText = agent.commissionType === 'PERCENTAGE' 
+      ? `${agent.commissionValue.toString()}%`
+      : 'ثابتة';
+
     if (agent.commissionType === 'PERCENTAGE') {
       const percentage = agent.commissionValue.div(100);
       amount = new Prisma.Decimal(amountPaid).mul(percentage);
     } else if (agent.commissionType === 'FIXED') {
       amount = agent.commissionValue;
     }
+
+    // Formulate highly detailed commission ledger entry description in Arabic
+    const calculationDate = new Date();
+    const formattedNotes = 
+      `سجل عمولة تلقائي:\n` +
+      `- اسم المندوب: ${agent.user.fullName}\n` +
+      `- اسم المشترك: ${user.fullName}\n` +
+      `- رقم الاشتراك: ${subscriptionId}\n` +
+      `- رقم عملية الدفع: ${paymentRequestId}\n` +
+      `- قيمة الاشتراك: ${amountPaid.toLocaleString()} ر.ي.\n` +
+      `- نسبة/نوع العمولة: ${commissionPercentText}\n` +
+      `- قيمة العمولة المستحقة: ${amount.toNumber().toLocaleString()} ر.ي.\n` +
+      `- تاريخ الاحتساب: ${calculationDate.toISOString()}`;
 
     // 2. Persist Commission record
     const commission = await tx.commission.create({
@@ -62,7 +88,7 @@ export class CommissionsService {
         paymentRequestId,
         amount,
         status: CommissionStatus.PENDING,
-        notes: `عمولة تلقائية محسوبة مقابل تفعيل اشتراك بقيمة ${amountPaid.toLocaleString()} ر.ي.`,
+        notes: formattedNotes,
       },
     });
 

@@ -212,13 +212,24 @@ export class SubscriptionsService {
       throw new BadRequestException('هذا الطلب تم معالجته مسبقاً');
     }
 
-    await this.prisma.paymentRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'REJECTED',
-        approvedById: adminId,
-        notes: reason,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.paymentRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'REJECTED',
+          approvedById: adminId,
+          notes: reason,
+        },
+      });
+
+      // Update associated commission status to REJECTED if any exists
+      await tx.commission.updateMany({
+        where: { paymentRequestId: requestId },
+        data: {
+          status: 'REJECTED',
+          notes: `تم رفض وإلغاء العمولة بسبب رفض طلب الدفع من قبل الإدارة. السبب: ${reason || 'غير محدد'}`,
+        },
+      });
     });
 
     await this.notificationsService.notifyUser(
@@ -232,7 +243,7 @@ export class SubscriptionsService {
       `Payment request ${requestId} rejected by admin ${adminId}`,
     );
 
-    return { success: true, message: 'تم رفض طلب الدفع' };
+    return { success: true, message: 'تم رفض طلب الدفع وتحديث العمولات' };
   }
 
   async checkSubscription(userId: string) {

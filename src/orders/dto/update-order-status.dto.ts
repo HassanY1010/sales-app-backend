@@ -46,4 +46,8 @@ export class UpdateOrderPricesDto {
   @IsString()
   @IsOptional()
   dueDate?: string;
+
+  @IsNumberString()
+  @IsOptional()
+  paidAmount?: string;
 }

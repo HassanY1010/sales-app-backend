@@ -82,10 +82,10 @@ export class FinanceService {
     let balanceChange = new Decimal(0);
 
     switch (type) {
-      case 'SALE': // Sender sold -> Receiver owes Sender more
+      case 'SALE': // Receiver (Merchant) sold to Sender (Customer) -> Sender owes Receiver more
         balanceChange = isSenderRequester
-          ? decimalAmount
-          : decimalAmount.negated();
+          ? decimalAmount.negated()
+          : decimalAmount;
         break;
       case 'PURCHASE': // Sender bought -> Sender owes Receiver more
         balanceChange = isSenderRequester

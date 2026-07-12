@@ -187,7 +187,14 @@ export class AuthService {
       throw new UnauthorizedException('هذا الحساب مسجل كنوع آخر');
     }
 
-    const isPasswordValid = await bcrypt.compare(dto.password, user.password);
+    let isPasswordValid = await bcrypt.compare(dto.password, user.password);
+    let isTempPassword = false;
+
+    if (!isPasswordValid && user.tempPasswordHash && user.tempPasswordExpiry && user.tempPasswordExpiry > new Date()) {
+      isPasswordValid = await bcrypt.compare(dto.password, user.tempPasswordHash);
+      isTempPassword = isPasswordValid;
+    }
+
     if (!isPasswordValid) {
       throw new UnauthorizedException('رقم الهاتف أو كلمة المرور غير صحيحة.');
     }
@@ -202,8 +209,14 @@ export class AuthService {
       ipAddress,
       Array.isArray(userAgent) ? userAgent.join(',') : userAgent,
     );
-    const { password: _, securityPin: __, ...safeUser } = user;
-    return { ...tokens, user: safeUser };
+    const { password: _, securityPin: __, tempPasswordHash: ___, tempPasswordExpiry: ____, ...safeUser } = user;
+    return { 
+      ...tokens, 
+      user: {
+        ...safeUser,
+        forcePasswordChange: user.forcePasswordChange || isTempPassword
+      }
+    };
   }
 
   async refresh(
@@ -291,6 +304,9 @@ export class AuthService {
       data: {
         password: await bcrypt.hash(newPassword, 10),
         lastLoginAt: new Date(),
+        tempPasswordHash: null,
+        tempPasswordExpiry: null,
+        forcePasswordChange: false,
       },
       include: { business: true },
     });

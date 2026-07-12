@@ -25,6 +25,12 @@ model User {
   referredAt                 DateTime?
   createdAt                  DateTime            @default(now())
   updatedAt                  DateTime            @updatedAt
+  tempPasswordHash           String?
+  tempPasswordExpiry         DateTime?
+  forcePasswordChange        Boolean             @default(false)
+  passwordResetCount         Int                 @default(0)
+  lastPasswordResetAt        DateTime?
+  lastPasswordResetById      String?
   createdAdjustmentRequests  AdjustmentRequest[] @relation("AdjustmentCreatedBy")
   reviewedAdjustmentRequests AdjustmentRequest[] @relation("AdjustmentReviewedBy")
   adminActions               AdminAction[]
@@ -203,6 +209,7 @@ model Notification {
   title     String
   body      String
   type      String?
+  metadata  Json?
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)

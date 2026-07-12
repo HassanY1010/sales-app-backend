@@ -73,7 +73,10 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const isMatch = await bcrypt.compare(dto.oldPassword, user.password);
+    let isMatch = await bcrypt.compare(dto.oldPassword, user.password);
+    if (!isMatch && user.tempPasswordHash && user.tempPasswordExpiry && user.tempPasswordExpiry > new Date()) {
+      isMatch = await bcrypt.compare(dto.oldPassword, user.tempPasswordHash);
+    }
     if (!isMatch) {
       throw new UnauthorizedException('Current password is incorrect');
     }
@@ -81,7 +84,12 @@ export class UsersService {
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword },
+      data: {
+        password: hashedPassword,
+        tempPasswordHash: null,
+        tempPasswordExpiry: null,
+        forcePasswordChange: false,
+      },
     });
 
     await this.prisma.refreshToken.updateMany({

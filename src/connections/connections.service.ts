@@ -27,8 +27,22 @@ export class ConnectionsService {
   private normalizeConnection(connection: any, businessId: string) {
     if (!connection) return null;
     const isRequester = connection.requesterId === businessId;
+    
+    let account = connection.account;
+    if (account) {
+      const dbBalance = new Decimal(account.balance as any || 0);
+      const normalizedBalance = isRequester ? dbBalance : dbBalance.negated();
+      account = {
+        ...account,
+        balance: normalizedBalance.toNumber(),
+        totalCredit: normalizedBalance.greaterThan(0) ? normalizedBalance.toNumber() : 0,
+        totalDebit: normalizedBalance.lessThan(0) ? normalizedBalance.abs().toNumber() : 0,
+      };
+    }
+
     const result: any = {
       ...connection,
+      account,
       connectionType: isRequester
         ? connection.connectionType
         : connection.connectionType === 'CUSTOMER'
@@ -649,6 +663,7 @@ export class ConnectionsService {
       creditLimit?: number;
       billingCycle?: string;
       dueDate?: string | null;
+      openingBalance?: number;
     },
   ) {
     const connection = await this.prisma.connection.findUnique({
@@ -688,6 +703,11 @@ export class ConnectionsService {
         }),
         ...(terms.dueDate !== undefined && {
           dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
+        }),
+        ...(terms.openingBalance !== undefined && {
+          balance: terms.openingBalance,
+          totalCredit: terms.openingBalance > 0 ? terms.openingBalance : 0,
+          totalDebit: terms.openingBalance < 0 ? Math.abs(terms.openingBalance) : 0,
         }),
       },
     });

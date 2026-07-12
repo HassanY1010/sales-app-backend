@@ -122,6 +122,7 @@ export class NotificationsService {
         title,
         body,
         type: data?.type,
+        metadata: data ? (data as any) : undefined,
       },
     });
 

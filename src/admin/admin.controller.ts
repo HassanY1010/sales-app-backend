@@ -80,8 +80,12 @@ export class AdminController {
 
   @Put('users/:id/reset-password')
   @Roles('SUPER_ADMIN', 'ADMIN')
-  resetUserPassword(@Param('id') id: string, @Request() req: any) {
-    return this.adminService.resetUserPassword(id, req.user.userId);
+  resetUserPassword(
+    @Param('id') id: string,
+    @Body() dto: any,
+    @Request() req: any,
+  ) {
+    return this.adminService.resetUserPassword(id, req.user.userId, dto);
   }
 
   @Delete('users/:id')
