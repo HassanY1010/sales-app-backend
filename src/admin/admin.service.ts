@@ -1080,8 +1080,10 @@ export class AdminService {
   async getNotifications(
     query: PaginationDto & { userId?: string; isRead?: boolean },
   ) {
-    const { page = 1, limit = 10, userId, isRead } = query;
-    const skip = (page - 1) * limit;
+    const pageNum = parseInt(query.page as any, 10) || 1;
+    const limitNum = parseInt(query.limit as any, 10) || 10;
+    const { userId, isRead } = query;
+    const skip = (pageNum - 1) * limitNum;
 
     const where: any = {};
     if (userId) where.userId = userId;
@@ -1094,7 +1096,7 @@ export class AdminService {
       this.prisma.notification.findMany({
         where,
         skip,
-        take: limit,
+        take: limitNum,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.notification.count({ where }),
@@ -1102,7 +1104,7 @@ export class AdminService {
 
     return {
       data: notifications,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     };
   }
 
