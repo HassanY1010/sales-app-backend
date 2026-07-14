@@ -330,6 +330,10 @@ export class AdminService {
         const connectionIds = connections.map((c) => c.id);
 
         if (connectionIds.length > 0) {
+          // Delete accounts pointing to these connections
+          await tx.account.deleteMany({
+            where: { connectionId: { in: connectionIds } },
+          });
           // Delete reminder logs pointing to these connections
           await tx.dueReminderLog.deleteMany({
             where: { connectionId: { in: connectionIds } },
@@ -403,10 +407,6 @@ export class AdminService {
           where: { businessId },
         });
 
-        // Delete accounts for this business
-        await tx.account.deleteMany({
-          where: { businessId },
-        });
 
         // Delete the business
         await tx.business.delete({
