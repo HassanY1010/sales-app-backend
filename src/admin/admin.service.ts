@@ -305,14 +305,157 @@ export class AdminService {
       businessId: user.business?.id,
     });
 
-    // Revoke all active sessions first
-    await this.prisma.refreshToken.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      // 1. If user is an agent, set referredByAgentId to null for all users they referred
+      const agent = await tx.agent.findFirst({ where: { userId } });
+      if (agent) {
+        await tx.user.updateMany({
+          where: { referredByAgentId: agent.id },
+          data: { referredByAgentId: null },
+        });
+      }
 
-    // Delete the user (cascade will handle related records per schema)
-    await this.prisma.user.delete({ where: { id: userId } });
+      // 2. If user has a business, delete the business and all its dependencies
+      const businessId = user.business?.id;
+      if (businessId) {
+        // Find all connections related to the business
+        const connections = await tx.connection.findMany({
+          where: {
+            OR: [
+              { requesterId: businessId },
+              { receiverId: businessId },
+            ],
+          },
+        });
+        const connectionIds = connections.map((c) => c.id);
+
+        if (connectionIds.length > 0) {
+          // Delete reminder logs pointing to these connections
+          await tx.dueReminderLog.deleteMany({
+            where: { connectionId: { in: connectionIds } },
+          });
+          // Delete connection commissions
+          await tx.commission.deleteMany({
+            where: { subscription: { businessId } },
+          });
+          // Delete connections
+          await tx.connection.deleteMany({
+            where: { id: { in: connectionIds } },
+          });
+        }
+
+        // Delete due reminders for this business
+        await tx.dueReminderLog.deleteMany({
+          where: { recipientBusinessId: businessId },
+        });
+
+        // Delete adjustment requests for this business
+        await tx.adjustmentRequest.deleteMany({
+          where: {
+            OR: [
+              { requesterBusinessId: businessId },
+              { receiverBusinessId: businessId },
+            ],
+          },
+        });
+
+        // Delete payment requests for this business
+        await tx.paymentRequest.deleteMany({
+          where: { businessId },
+        });
+
+        // Delete expenses for this business
+        await tx.expense.deleteMany({
+          where: { businessId },
+        });
+
+        // Delete order items of orders for this business
+        const orders = await tx.order.findMany({
+          where: {
+            OR: [
+              { senderId: businessId },
+              { receiverId: businessId },
+            ],
+          },
+        });
+        const orderIds = orders.map((o) => o.id);
+        if (orderIds.length > 0) {
+          await tx.orderItem.deleteMany({
+            where: { orderId: { in: orderIds } },
+          });
+          await tx.order.deleteMany({
+            where: { id: { in: orderIds } },
+          });
+        }
+
+        // Delete transactions for this business
+        await tx.transaction.deleteMany({
+          where: {
+            OR: [
+              { senderId: businessId },
+              { receiverId: businessId },
+            ],
+          },
+        });
+
+        // Delete user subscriptions for this business
+        await tx.userSubscription.deleteMany({
+          where: { businessId },
+        });
+
+        // Delete accounts for this business
+        await tx.account.deleteMany({
+          where: { businessId },
+        });
+
+        // Delete the business
+        await tx.business.delete({
+          where: { id: businessId },
+        });
+      }
+
+      // 3. Delete user specific dependencies
+      await tx.userSubscription.deleteMany({ where: { userId } });
+      await tx.refreshToken.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.expense.deleteMany({ where: { userId } });
+      await tx.auditLog.deleteMany({ where: { userId } });
+      
+      // Delete adjustment requests created or reviewed by this user
+      await tx.adjustmentRequest.deleteMany({
+        where: {
+          OR: [
+            { createdById: userId },
+            { reviewedById: userId },
+          ],
+        },
+      });
+
+      // Delete payment requests
+      await tx.paymentRequest.deleteMany({
+        where: {
+          OR: [
+            { userId },
+            { approvedById: userId },
+          ],
+        },
+      });
+
+      // Delete suggestions
+      await tx.suggestion.deleteMany({ where: { userId } });
+
+      // Delete commissions
+      await tx.commission.deleteMany({ where: { customerId: userId } });
+
+      // Revoke all active sessions
+      await tx.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      // Finally delete the user
+      await tx.user.delete({ where: { id: userId } });
+    });
 
     return { success: true, message: 'تم حذف المستخدم بنجاح' };
   }
