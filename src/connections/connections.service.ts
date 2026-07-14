@@ -26,9 +26,10 @@ export class ConnectionsService {
 
   private normalizeConnection(connection: any, businessId: string) {
     if (!connection) return null;
-    const isRequester = connection.requesterId === businessId;
+    const plainConnection = JSON.parse(JSON.stringify(connection));
+    const isRequester = plainConnection.requesterId === businessId;
     
-    let account = connection.account;
+    let account = plainConnection.account;
     if (account) {
       const dbBalance = new Decimal(account.balance as any || 0);
       const normalizedBalance = isRequester ? dbBalance : dbBalance.negated();
@@ -41,18 +42,18 @@ export class ConnectionsService {
     }
 
     const result: any = {
-      ...connection,
+      ...plainConnection,
       account,
       connectionType: isRequester
-        ? connection.connectionType
-        : connection.connectionType === 'CUSTOMER'
+        ? plainConnection.connectionType
+        : plainConnection.connectionType === 'CUSTOMER'
         ? 'SUPPLIER'
         : 'CUSTOMER',
       direction: isRequester ? 'SENT' : 'RECEIVED',
     };
 
-    if (connection.receiver || connection.requester) {
-      result.business = isRequester ? connection.receiver : connection.requester;
+    if (plainConnection.receiver || plainConnection.requester) {
+      result.business = isRequester ? plainConnection.receiver : plainConnection.requester;
     }
 
     return result;
@@ -205,6 +206,9 @@ export class ConnectionsService {
     const openingBalance = options?.openingBalance ?? 0;
     const showPrices = options?.showPrices ?? false;
 
+    const isRequester = connection.requesterId === businessId;
+    const dbOpeningBalance = isRequester ? openingBalance : -openingBalance;
+
     // Accept connection and auto-create a financial Account with credit config if it doesn't exist
     return this.prisma.$transaction(async (prisma) => {
       // Check if account already exists (from a previous Accepted state before blocking)
@@ -223,18 +227,18 @@ export class ConnectionsService {
                   billingCycle,
                   dueDate,
                   ...(openingBalance !== 0 && {
-                    balance: openingBalance,
-                    totalCredit: openingBalance > 0 ? openingBalance : 0,
+                    balance: dbOpeningBalance,
+                    totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
                     totalDebit:
-                      openingBalance < 0 ? Math.abs(openingBalance) : 0,
+                      dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
                   }),
                 },
               }
             : {
                 create: {
-                  balance: openingBalance,
-                  totalCredit: openingBalance > 0 ? openingBalance : 0,
-                  totalDebit: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+                  balance: dbOpeningBalance,
+                  totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
+                  totalDebit: dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
                   creditLimit,
                   billingCycle,
                   dueDate,
@@ -251,12 +255,16 @@ export class ConnectionsService {
 
       // If there's an opening balance, create an ADJUSTMENT transaction to document it
       if (openingBalance !== 0) {
+        const senderId = dbOpeningBalance > 0 ? connection.requesterId : connection.receiverId;
+        const receiverId = dbOpeningBalance > 0 ? connection.receiverId : connection.requesterId;
+        const amount = Math.abs(dbOpeningBalance);
+
         await prisma.transaction.create({
           data: {
             transactionType: 'ADJUSTMENT',
-            amount: Math.abs(openingBalance),
-            senderId: connection.requesterId,
-            receiverId: connection.receiverId,
+            amount,
+            senderId,
+            receiverId,
             note: `رصيد افتتاحي: ${openingBalance}`,
           },
         });
@@ -653,6 +661,22 @@ export class ConnectionsService {
       },
     });
 
+    if (initialBalance !== 0) {
+      const senderId = initialBalance > 0 ? created.requesterId : created.receiverId;
+      const receiverId = initialBalance > 0 ? created.receiverId : created.requesterId;
+      const amount = Math.abs(initialBalance);
+
+      await this.prisma.transaction.create({
+        data: {
+          transactionType: 'ADJUSTMENT',
+          amount,
+          senderId,
+          receiverId,
+          note: `رصيد افتتاحي: ${initialBalance}`,
+        },
+      });
+    }
+
     return this.normalizeConnection(created, myBusinessId);
   }
 
@@ -692,37 +716,93 @@ export class ConnectionsService {
       throw new BadRequestException('Credit limit must be zero or greater');
     }
 
-    const updated = await this.prisma.account.update({
-      where: { id: connection.account.id },
-      data: {
-        ...(terms.creditLimit !== undefined && {
-          creditLimit: terms.creditLimit,
-        }),
-        ...(terms.billingCycle !== undefined && {
-          billingCycle: terms.billingCycle,
-        }),
-        ...(terms.dueDate !== undefined && {
-          dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
-        }),
-        ...(terms.openingBalance !== undefined && {
-          balance: terms.openingBalance,
-          totalCredit: terms.openingBalance > 0 ? terms.openingBalance : 0,
-          totalDebit: terms.openingBalance < 0 ? Math.abs(terms.openingBalance) : 0,
-        }),
-      },
-    });
+    const account = connection.account;
+    const isRequester = connection.requesterId === businessId;
 
-    await this.prisma.auditLog.create({
-      data: {
-        action: 'UPDATE',
-        resource: 'ACCOUNT_TERMS',
-        resourceId: updated.id,
-        businessId,
-        details: terms,
-      },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      let dbOpeningBalance = terms.openingBalance;
+      if (dbOpeningBalance !== undefined) {
+        dbOpeningBalance = isRequester ? dbOpeningBalance : -dbOpeningBalance;
+      }
 
-    return updated;
+      const updated = await tx.account.update({
+        where: { id: account.id },
+        data: {
+          ...(terms.creditLimit !== undefined && {
+            creditLimit: terms.creditLimit,
+          }),
+          ...(terms.billingCycle !== undefined && {
+            billingCycle: terms.billingCycle,
+          }),
+          ...(terms.dueDate !== undefined && {
+            dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
+          }),
+          ...(dbOpeningBalance !== undefined && {
+            balance: dbOpeningBalance,
+            totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
+            totalDebit: dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
+          }),
+        },
+      });
+
+      if (dbOpeningBalance !== undefined) {
+        // Find existing opening balance transaction
+        const existingAdjustment = await tx.transaction.findFirst({
+          where: {
+            transactionType: 'ADJUSTMENT',
+            note: { startsWith: 'رصيد افتتاحي' },
+            OR: [
+              { senderId: connection.requesterId, receiverId: connection.receiverId },
+              { senderId: connection.receiverId, receiverId: connection.requesterId },
+            ],
+          },
+        });
+
+        if (dbOpeningBalance === 0) {
+          if (existingAdjustment) {
+            await tx.transaction.delete({ where: { id: existingAdjustment.id } });
+          }
+        } else {
+          const senderId = dbOpeningBalance > 0 ? connection.requesterId : connection.receiverId;
+          const receiverId = dbOpeningBalance > 0 ? connection.receiverId : connection.requesterId;
+          const amount = Math.abs(dbOpeningBalance);
+
+          if (existingAdjustment) {
+            await tx.transaction.update({
+              where: { id: existingAdjustment.id },
+              data: {
+                amount,
+                senderId,
+                receiverId,
+                note: `رصيد افتتاحي: ${terms.openingBalance}`,
+              },
+            });
+          } else {
+            await tx.transaction.create({
+              data: {
+                transactionType: 'ADJUSTMENT',
+                amount,
+                senderId,
+                receiverId,
+                note: `رصيد افتتاحي: ${terms.openingBalance}`,
+              },
+            });
+          }
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          action: 'UPDATE',
+          resource: 'ACCOUNT_TERMS',
+          resourceId: updated.id,
+          businessId,
+          details: terms,
+        },
+      });
+
+      return updated;
+    });
   }
 
   async updateContactInfo(
