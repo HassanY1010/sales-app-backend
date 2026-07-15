@@ -200,18 +200,39 @@ export class FinanceService {
       include: { user: true },
     });
 
+    const amountStr = new Decimal(amount.toString()).toFixed(2);
+
+    if (type === 'PAYMENT') {
+      // Send notification ONLY to the customer (client) who made the payment, not the merchant
+      if (sender?.user?.id) {
+        await this.notificationsService.sendPushNotification(
+          sender.user.id,
+          'تم تسجيل سند قبض',
+          `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
+          {
+            type: 'PAYMENT_RECEIVED',
+            amount: amountStr,
+            transactionType: type,
+          },
+        );
+
+        this.eventsGateway.emitToBusiness(senderId, 'FINANCIAL_UPDATE', {
+          type,
+          amount: amountStr,
+          newBalance: newBalance.toString(),
+          receiverName: receiver?.name,
+          note,
+        });
+      }
+      return;
+    }
+
     if (!receiver) return;
 
     let title = '';
     let body = '';
 
-    const amountStr = new Decimal(amount.toString()).toFixed(2);
-
     switch (type) {
-      case 'PAYMENT':
-        title = 'تم استلام مبلغ سداد';
-        body = `لقد استلمت مبلغ ${amountStr} من ${sender?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`;
-        break;
       case 'SALE':
         // Notification for Sale is usually handled by Order service,
         // but if it's a direct transaction, we handle it here.
@@ -239,27 +260,6 @@ export class FinanceService {
         senderName: sender?.name,
         note,
       });
-
-      if (type === 'PAYMENT' && sender?.user?.id) {
-        await this.notificationsService.sendPushNotification(
-          sender.user.id,
-          'تم تسجيل سند قبض',
-          `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
-          {
-            type: 'PAYMENT_RECEIVED',
-            amount: amountStr,
-            transactionType: type,
-          },
-        );
-
-        this.eventsGateway.emitToBusiness(senderId, 'FINANCIAL_UPDATE', {
-          type,
-          amount: amountStr,
-          newBalance: newBalance.toString(),
-          receiverName: receiver.name,
-          note,
-        });
-      }
     }
   }
 

@@ -338,14 +338,16 @@ export class OrdersService {
       throw new ForbiddenException('ليس لديك صلاحية على هذه الطلبية');
     }
 
-    if (userType === 'individual' && order.receiverId === businessId) {
-      throw new ForbiddenException(
-        'حساب المستهلك لا يستقبل أو يعالج طلبيات بيع',
-      );
-    }
-
-    if (userType === 'individual' && dto.status !== 'CANCELLED') {
-      throw new ForbiddenException('المستهلك يمكنه إلغاء طلبياته المرسلة فقط');
+    if (userType === 'individual') {
+      if (order.receiverId === businessId) {
+        if (!['ACCEPTED', 'REJECTED'].includes(dto.status)) {
+          throw new ForbiddenException('المستهلك يمكنه فقط قبول أو رفض الفاتورة المستلمة');
+        }
+      } else {
+        if (dto.status !== 'CANCELLED') {
+          throw new ForbiddenException('المستهلك يمكنه إلغاء طلبياته المرسلة فقط');
+        }
+      }
     }
 
     if (
