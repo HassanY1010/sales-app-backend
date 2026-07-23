@@ -3,6 +3,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { PrismaService } from '../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FinanceService } from '../finance/finance.service';
 
 // ====================================================================
 // Mock helpers
@@ -96,6 +97,7 @@ describe('AdminService', () => {
         AdminService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: NotificationsService, useValue: mockNotificationsService },
+        { provide: FinanceService, useValue: { rebuildAccountBalance: jest.fn(), recordFinancialMovement: jest.fn() } },
       ],
     }).compile();
 

@@ -27,6 +27,14 @@ export class CreateAdjustmentRequestDto {
   requestedNote?: string;
 
   @IsString()
+  @IsOptional()
+  originalData?: string;
+
+  @IsString()
+  @IsOptional()
+  requestedData?: string;
+
+  @IsString()
   @Length(5, 1000)
   reason: string;
 }

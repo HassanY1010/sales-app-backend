@@ -43,15 +43,70 @@ export class AdjustmentRequestsService {
     const receiverBusinessId =
       target.senderId === businessId ? target.receiverId : target.senderId;
 
-    if (!dto.requestedAmount && !dto.requestedDueDate && !dto.requestedNote) {
+    let originalData = dto.originalData;
+    let requestedData = dto.requestedData;
+
+    // Check if target is an ORDER and generate originalData snapshot automatically if not provided
+    if (dto.targetType === 'ORDER' && !originalData) {
+      const order = await this.prisma.order.findUnique({
+        where: { id: dto.targetId },
+        include: { items: true },
+      });
+      if (order) {
+        originalData = JSON.stringify(
+          order.items.map(item => ({
+            itemId: item.id,
+            itemName: item.itemName,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice.toString(),
+            total: item.total.toString(),
+          }))
+        );
+      }
+    } else if (dto.targetType === 'TRANSACTION' && !originalData) {
+      const txn = await this.prisma.transaction.findUnique({
+        where: { id: dto.targetId },
+      });
+      if (txn) {
+        originalData = JSON.stringify({
+          amount: txn.amount.toString(),
+          note: txn.note || '',
+        });
+      }
+    }
+
+    if (!dto.requestedAmount && !dto.requestedDueDate && !dto.requestedNote && !requestedData) {
       throw new BadRequestException(
         'At least one requested change is required',
       );
     }
 
-    const requestedAmount = dto.requestedAmount
+    let requestedAmount = dto.requestedAmount
       ? new Decimal(dto.requestedAmount)
       : undefined;
+
+    if (dto.targetType === 'ORDER' && requestedData && !dto.requestedAmount) {
+      try {
+        const items = JSON.parse(requestedData);
+        if (Array.isArray(items)) {
+          let computedSubtotal = new Decimal(0);
+          for (const item of items) {
+            const qty = new Decimal(item.quantity || '0');
+            const price = new Decimal(item.unitPrice || '0');
+            computedSubtotal = computedSubtotal.plus(qty.times(price));
+          }
+          const order = await this.prisma.order.findUnique({
+            where: { id: dto.targetId },
+          });
+          if (order) {
+            const tax = new Decimal(order.tax as any);
+            const discount = new Decimal(order.discount as any);
+            requestedAmount = computedSubtotal.plus(tax).minus(discount);
+          }
+        }
+      } catch (_) {}
+    }
+
     if (requestedAmount && requestedAmount.lessThan(0)) {
       throw new BadRequestException('Requested amount must be zero or greater');
     }
@@ -67,31 +122,60 @@ export class AdjustmentRequestsService {
           ? new Date(dto.requestedDueDate)
           : undefined,
         requestedNote: dto.requestedNote,
+        originalData,
+        requestedData,
         reason: dto.reason,
         createdById: userId,
       },
       include: this.includeRelations(),
     });
 
+    const requesterBusiness = await this.prisma.business.findUnique({
+      where: { id: businessId },
+    });
+    const requesterName = requesterBusiness?.name || 'العميل';
+    const typeLabel = dto.targetType === 'ORDER' ? 'فاتورة' : 'سند';
+
     await this.notifyBusiness(
       receiverBusinessId,
       'طلب تعديل بانتظار المراجعة',
-      `يوجد طلب تعديل جديد على ${target.label}.`,
-      { type: 'ADJUSTMENT_REQUEST_CREATED', adjustmentRequestId: request.id },
+      `طلب العميل (${requesterName}) تعديل ${typeLabel} #${target.label.replace('order ', '').replace('transaction ', '') || target.targetId}.`,
+      {
+        type: 'ADJUSTMENT_REQUEST_CREATED',
+        notificationType: 'amendment_request_pending',
+        entityType: 'invoice',
+        entityId: target.targetId,
+        route: `app://invoice/${target.targetId}/amendment-request/${request.id}`,
+        adjustmentRequestId: request.id,
+      },
     );
 
     await this.prisma.auditLog.create({
       data: {
         userId,
         businessId,
-        action: 'CREATE',
-        resource: 'ADJUSTMENT_REQUEST',
-        resourceId: request.id,
+        action: 'CREATE_AMENDMENT',
+        resource: dto.targetType,
+        resourceId: dto.targetId,
         details: {
-          targetType: dto.targetType,
-          targetId: dto.targetId,
+          adjustmentRequestId: request.id,
           requestedAmount: requestedAmount?.toString(),
           requestedDueDate: dto.requestedDueDate,
+        },
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'NOTIFICATION_SENT',
+        resource: 'NOTIFICATION',
+        resourceId: target.targetId,
+        details: {
+          notificationType: 'amendment_request_pending',
+          recipientBusinessId: receiverBusinessId,
+          entityId: target.targetId,
         },
       },
     });
@@ -177,71 +261,129 @@ export class AdjustmentRequestsService {
         }
       }
 
-      // 2. Amount change — update the actual record, then rebuild balance
-      if (request.requestedAmount) {
-        const requestedAmount = new Decimal(request.requestedAmount as any);
-        const difference = requestedAmount.minus(target.currentAmount);
+      // 2. Amount and Itemized changes — update target record, order items, and linked payments
+      let finalAmount = request.requestedAmount
+        ? new Decimal(request.requestedAmount as any)
+        : target.currentAmount;
 
-        if (request.targetType === 'ORDER') {
-          // 2a. Update the Order's total directly
-          await tx.order.update({
-            where: { id: request.targetId },
-            data: { total: requestedAmount.toString() },
-          });
-
-          // 2b. Update the linked SALE transaction's amount (if any)
-          const linkedTransaction = await tx.transaction.findFirst({
-            where: { orderId: request.targetId, transactionType: 'SALE' },
-          });
-          if (linkedTransaction) {
-            await tx.transaction.update({
-              where: { id: linkedTransaction.id },
-              data: { amount: requestedAmount.toString() },
-            });
-          }
-        } else {
-          // 2c. Update the Transaction's amount directly
-          await tx.transaction.update({
-            where: { id: request.targetId },
-            data: { amount: requestedAmount.toString() },
-          });
-        }
-
-        // 3. Record ledger ADJUSTMENT entry for the difference (only if non-zero)
-        if (!difference.isZero()) {
-          const increasesOriginalDirection = difference.greaterThan(0);
-          await this.financeService.recordFinancialMovement(tx, {
-            senderId: increasesOriginalDirection
-              ? target.senderId
-              : target.receiverId,
-            receiverId: increasesOriginalDirection
-              ? target.receiverId
-              : target.senderId,
-            amount: difference.abs().toString(),
-            type: 'ADJUSTMENT',
-            note: `Approved adjustment request ${request.id} for ${target.label}`,
-            userId,
-          });
-        }
-
-        // 4. Rebuild account balance from ledger ground truth
-        const connection = await tx.connection.findFirst({
-          where: {
-            OR: [
-              { requesterId: target.senderId, receiverId: target.receiverId },
-              { requesterId: target.receiverId, receiverId: target.senderId },
-            ],
-            status: 'ACCEPTED',
-          },
-          include: { account: true },
+      if (request.targetType === 'ORDER') {
+        const order = await tx.order.findUnique({
+          where: { id: request.targetId },
         });
 
-        if (connection?.account) {
-          await this.financeService.rebuildAccountBalance(
-            connection.account.id,
-            tx,
+        if (order) {
+          // 2a. Update order items if requestedData is provided
+          if (request.requestedData) {
+            try {
+              const items = JSON.parse(request.requestedData);
+              if (Array.isArray(items)) {
+                for (const item of items) {
+                  if (item.itemId) {
+                    await tx.orderItem.update({
+                      where: { id: item.itemId },
+                      data: {
+                        itemName: item.itemName,
+                        quantity: Number(item.quantity || 1),
+                        unitPrice: item.unitPrice,
+                        total: new Decimal(item.quantity || '1').times(new Decimal(item.unitPrice || '0')).toString(),
+                      },
+                    });
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          // 2b. Recalculate subtotal and final total from current order items
+          const currentItems = await tx.orderItem.findMany({
+            where: { orderId: request.targetId },
+          });
+          const newSubtotal = currentItems.reduce(
+            (sum, item) => sum.plus(new Decimal(item.total as any)),
+            new Decimal(0),
           );
+          const tax = new Decimal(order.tax as any);
+          const discount = new Decimal(order.discount as any);
+          finalAmount = newSubtotal.plus(tax).minus(discount);
+
+          // 2c. payment-status recalculation and balance reconciliation
+          let finalPaid = new Decimal(order.paidAmount as any);
+          if (finalAmount.lessThan(finalPaid)) {
+            finalPaid = finalAmount;
+            // Update linked PAYMENT transaction (if any exists for partial payment)
+            const linkedPayment = await tx.transaction.findFirst({
+              where: { orderId: request.targetId, transactionType: 'PAYMENT' },
+            });
+            if (linkedPayment) {
+              await tx.transaction.update({
+                where: { id: linkedPayment.id },
+                data: { amount: finalAmount.toString() },
+              });
+            }
+          }
+
+          // 2d. Save updated invoice total and subtotal
+          await tx.order.update({
+            where: { id: request.targetId },
+            data: {
+              subtotal: newSubtotal.toString(),
+              total: finalAmount.toString(),
+              paidAmount: finalPaid.toString(),
+            },
+          });
         }
+
+        // 2e. Update the linked SALE transaction's amount to new total
+        const linkedSale = await tx.transaction.findFirst({
+          where: { orderId: request.targetId, transactionType: 'SALE' },
+        });
+        if (linkedSale) {
+          await tx.transaction.update({
+            where: { id: linkedSale.id },
+            data: { amount: finalAmount.toString() },
+          });
+        }
+      } else {
+        // For TRANSACTION targets (receipt vouchers)
+        let noteUpdate: string | undefined;
+        if (request.requestedData) {
+          try {
+            const txnData = JSON.parse(request.requestedData);
+            if (txnData.amount) {
+              finalAmount = new Decimal(txnData.amount);
+            }
+            if (txnData.note) {
+              noteUpdate = txnData.note;
+            }
+          } catch (_) {}
+        }
+
+        await tx.transaction.update({
+          where: { id: request.targetId },
+          data: {
+            amount: finalAmount.toString(),
+            note: noteUpdate ?? undefined,
+          },
+        });
+      }
+
+      // 3. Rebuild account balance from ledger ground truth
+      const connection = await tx.connection.findFirst({
+        where: {
+          OR: [
+            { requesterId: target.senderId, receiverId: target.receiverId },
+            { requesterId: target.receiverId, receiverId: target.senderId },
+          ],
+          status: 'ACCEPTED',
+        },
+        include: { account: true },
+      });
+
+      if (connection?.account) {
+        await this.financeService.rebuildAccountBalance(
+          connection.account.id,
+          tx,
+        );
       }
 
       const approved = await tx.adjustmentRequest.update({
@@ -258,13 +400,13 @@ export class AdjustmentRequestsService {
         data: {
           userId,
           businessId,
-          action: 'APPROVE',
-          resource: 'ADJUSTMENT_REQUEST',
-          resourceId: id,
+          action: 'APPROVE_AMENDMENT',
+          resource: request.targetType,
+          resourceId: request.targetId,
           details: {
-            targetType: request.targetType,
-            targetId: request.targetId,
+            adjustmentRequestId: id,
             requestedAmount: request.requestedAmount?.toString(),
+            finalAmount: finalAmount.toString(),
           },
         },
       });
@@ -276,8 +418,30 @@ export class AdjustmentRequestsService {
       request.requesterBusinessId,
       'تمت الموافقة على طلب التعديل',
       `تمت الموافقة على طلب التعديل الخاص بـ ${target.label}.`,
-      { type: 'ADJUSTMENT_REQUEST_APPROVED', adjustmentRequestId: id },
+      {
+        type: 'ADJUSTMENT_REQUEST_APPROVED',
+        notificationType: 'amendment_request_approved',
+        entityType: 'invoice',
+        entityId: target.targetId,
+        route: `app://invoice/${target.targetId}`,
+        adjustmentRequestId: id,
+      },
     );
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'NOTIFICATION_SENT',
+        resource: 'NOTIFICATION',
+        resourceId: target.targetId,
+        details: {
+          notificationType: 'amendment_request_approved',
+          recipientBusinessId: request.requesterBusinessId,
+          entityId: target.targetId,
+        },
+      },
+    });
 
     return updated;
   }
@@ -309,12 +473,11 @@ export class AdjustmentRequestsService {
       data: {
         userId,
         businessId,
-        action: 'REJECT',
-        resource: 'ADJUSTMENT_REQUEST',
-        resourceId: id,
+        action: 'REJECT_AMENDMENT',
+        resource: request.targetType,
+        resourceId: request.targetId,
         details: {
-          targetType: request.targetType,
-          targetId: request.targetId,
+          adjustmentRequestId: id,
           rejectionReason: rejectionReason.trim(),
         },
       },
@@ -324,8 +487,30 @@ export class AdjustmentRequestsService {
       request.requesterBusinessId,
       'تم رفض طلب التعديل',
       `تم رفض طلب التعديل. السبب: ${rejectionReason.trim()}`,
-      { type: 'ADJUSTMENT_REQUEST_REJECTED', adjustmentRequestId: id },
+      {
+        type: 'ADJUSTMENT_REQUEST_REJECTED',
+        notificationType: 'amendment_request_rejected',
+        entityType: 'invoice',
+        entityId: request.targetId,
+        route: `app://invoice/${request.targetId}`,
+        adjustmentRequestId: id,
+      },
     );
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'NOTIFICATION_SENT',
+        resource: 'NOTIFICATION',
+        resourceId: request.targetId,
+        details: {
+          notificationType: 'amendment_request_rejected',
+          recipientBusinessId: request.requesterBusinessId,
+          entityId: request.targetId,
+        },
+      },
+    });
 
     return rejected;
   }

@@ -42,9 +42,11 @@ export class FinanceService {
       dueDate?: string | Date;
       attachmentUrl?: string;
       userId?: string; // For audit logging
+      connectionId?: string;
+      clientId?: string; // Device-generated UUID for idempotency
     },
   ) {
-    const { senderId, receiverId, amount, type, orderId, note, userId } =
+    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId } =
       params;
     const decimalAmount = new Decimal(amount.toString());
 
@@ -58,16 +60,21 @@ export class FinanceService {
     // However, in $transaction, subsequent updates to the same row are naturally queued.
     // To be 100% safe against stale reads in the same transaction, we fetch the account.
 
-    const connection = await tx.connection.findFirst({
-      where: {
-        OR: [
-          { requesterId: senderId, receiverId: receiverId },
-          { requesterId: receiverId, receiverId: senderId },
-        ],
-        status: 'ACCEPTED',
-      },
-      include: { account: true },
-    });
+    const connection = connectionId
+      ? await tx.connection.findFirst({
+          where: { id: connectionId, status: 'ACCEPTED' },
+          include: { account: true },
+        })
+      : await tx.connection.findFirst({
+          where: {
+            OR: [
+              { requesterId: senderId, receiverId: receiverId },
+              { requesterId: receiverId, receiverId: senderId },
+            ],
+            status: 'ACCEPTED',
+          },
+          include: { account: true },
+        });
 
     if (!connection || !connection.account) {
       throw new BadRequestException(
@@ -134,6 +141,7 @@ export class FinanceService {
     // 5. Create Ledger Entry (Transaction table)
     const transaction = await tx.transaction.create({
       data: {
+        clientId: params.clientId ?? undefined, // Store device UUID for idempotency
         transactionType: type,
         voucherNumber: params.voucherNumber || this.generateVoucherNumber(type),
         amount: decimalAmount.toString(),
@@ -172,7 +180,7 @@ export class FinanceService {
     });
 
     // 7. Send Real-time Notification
-    await this.notifyFinancialMovement(params, newBalance);
+    await this.notifyFinancialMovement(params, newBalance, transaction.id);
 
     return { transaction, newBalance };
   }
@@ -187,8 +195,8 @@ export class FinanceService {
     return `${prefixMap[type]}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
   }
 
-  private async notifyFinancialMovement(params: any, newBalance: Decimal) {
-    const { senderId, receiverId, amount, type, note } = params;
+  private async notifyFinancialMovement(params: any, newBalance: Decimal, transactionId?: string) {
+    const { senderId, receiverId, amount, type, orderId, note } = params;
 
     // Fetch participants for notification
     const sender = await this.prisma.business.findUnique({
@@ -213,6 +221,8 @@ export class FinanceService {
             type: 'PAYMENT_RECEIVED',
             amount: amountStr,
             transactionType: type,
+            recordId: transactionId,
+            transactionId: transactionId,
           },
         );
 
@@ -222,6 +232,7 @@ export class FinanceService {
           newBalance: newBalance.toString(),
           receiverName: receiver?.name,
           note,
+          transactionId,
         });
       }
       return;
@@ -250,7 +261,14 @@ export class FinanceService {
         receiver.user.id,
         title,
         body,
-        { type: 'FINANCIAL_UPDATE', amount: amountStr, transactionType: type },
+        {
+          type: orderId ? 'order' : 'receipt_voucher',
+          amount: amountStr,
+          transactionType: type,
+          recordId: orderId || transactionId,
+          orderId: orderId,
+          transactionId: transactionId,
+        },
       );
 
       this.eventsGateway.emitToBusiness(receiverId, 'FINANCIAL_UPDATE', {
@@ -259,6 +277,8 @@ export class FinanceService {
         newBalance: newBalance.toString(),
         senderName: sender?.name,
         note,
+        transactionId,
+        orderId,
       });
     }
   }
@@ -301,8 +321,8 @@ export class FinanceService {
       switch (t.transactionType) {
         case 'SALE':
           balance = isSenderRequester
-            ? balance.plus(amount)
-            : balance.minus(amount);
+            ? balance.minus(amount)
+            : balance.plus(amount);
           break;
         case 'PURCHASE':
           balance = isSenderRequester

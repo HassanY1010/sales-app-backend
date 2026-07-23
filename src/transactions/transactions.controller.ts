@@ -18,12 +18,16 @@ import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { Roles } from '../core/decorators/roles.decorator';
+import { AuditService } from '../audit/audit.service';
 
 @Controller('transactions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('business', 'individual')
 export class TransactionsController {
-  constructor(private readonly transactionsService: TransactionsService) {}
+  constructor(
+    private readonly transactionsService: TransactionsService,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post()
   @Roles('business')
@@ -34,7 +38,23 @@ export class TransactionsController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.transactionsService.createTransaction(user.businessId, dto);
+    const transaction = await this.transactionsService.createTransaction(user.businessId, dto);
+    await this.auditService.record({
+      userId: user.userId,
+      businessId: user.businessId,
+      action: 'CREATE',
+      resource: 'TRANSACTION',
+      resourceId: transaction.id,
+      details: {
+        transactionType: transaction.transactionType,
+        amount: transaction.amount?.toString(),
+        voucherNumber: transaction.voucherNumber,
+        receiverId: transaction.receiverId,
+        senderId: transaction.senderId,
+        sourceScreen: dto.sourceScreen ?? 'DIRECT',
+      },
+    });
+    return transaction;
   }
 
   @Get()
@@ -54,6 +74,31 @@ export class TransactionsController {
       throw new ForbiddenException('User does not have an associated business');
     }
     return this.transactionsService.getTransactionsSummary(user.businessId);
+  }
+
+  @Get(':id')
+  async getTransactionById(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    const transaction = await this.transactionsService.getTransactionById(user.businessId, id);
+
+    await this.auditService.record({
+      userId: user.userId,
+      businessId: user.businessId,
+      action: 'OPEN',
+      resource: 'TRANSACTION',
+      resourceId: id,
+      details: {
+        voucherNumber: transaction.voucherNumber,
+        transactionType: transaction.transactionType,
+      },
+    });
+
+    return transaction;
   }
 
   /** Edit a transaction (Blocker-01) */

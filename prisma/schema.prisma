@@ -46,6 +46,7 @@ model User {
   suggestions                Suggestion[]
   subscriptions              UserSubscription[]
   referredByAgent            Agent?              @relation("ReferredUsers", fields: [referredByAgentId], references: [id])
+  createdLinks               CustomerSupplierLink[] @relation("CreatedLinks")
 
   @@map("users")
 }
@@ -108,13 +109,16 @@ model Connection {
   blockedById     String?
   lastRequestedAt DateTime? @default(now())
   retryCount      Int       @default(0)
+  isReadReceiver  Boolean   @default(false)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   account         Account?
   receiver        Business  @relation("Receiver", fields: [receiverId], references: [id])
   requester       Business  @relation("Requester", fields: [requesterId], references: [id])
+  customerLinks   CustomerSupplierLink[] @relation("CustomerLink")
+  supplierLinks   CustomerSupplierLink[] @relation("SupplierLink")
 
-  @@unique([requesterId, receiverId])
+  @@unique([requesterId, receiverId, connectionType])
   @@map("connections")
 }
 
@@ -136,6 +140,7 @@ model Account {
 
 model Order {
   id              String        @id @default(uuid())
+  clientId        String?       @unique   // UUID generated on device — prevents duplicate creation on retry
   orderNumber     String        @unique
   senderId        String
   receiverId      String
@@ -153,6 +158,7 @@ model Order {
   notes           String?
   rejectionReason String?
   rejectedById    String?
+  invoiceId       String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   items           OrderItem[]
@@ -181,6 +187,7 @@ model OrderItem {
 
 model Transaction {
   id              String    @id @default(uuid())
+  clientId        String?   @unique   // UUID generated on device — prevents duplicate creation on retry
   transactionType String
   voucherNumber   String?
   amount          Decimal   @db.Decimal(15, 2)
@@ -339,6 +346,8 @@ model AdjustmentRequest {
   reviewedAt          DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+  originalData        String?
+  requestedData       String?
   createdBy           User      @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
   receiverBusiness    Business  @relation("AdjustmentReceiver", fields: [receiverBusinessId], references: [id])
   requesterBusiness   Business  @relation("AdjustmentRequester", fields: [requesterBusinessId], references: [id])
@@ -514,6 +523,7 @@ enum SubscriptionStatus {
   FREE
   GOLD
   EXPIRED
+  SUSPENDED
 }
 
 enum PaymentRequestStatus {
@@ -545,3 +555,28 @@ enum PayoutStatus {
   PENDING
   PAID
 }
+
+model InvoiceCounter {
+  id      Int @id @default(1)
+  lastNum Int @default(0)
+
+  @@map("invoice_counter")
+}
+
+model CustomerSupplierLink {
+  id          String   @id @default(uuid())
+  customerId  String
+  supplierId  String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  status      String   @default("ACTIVE") // ACTIVE | INACTIVE
+
+  customer    Connection @relation("CustomerLink", fields: [customerId], references: [id], onDelete: Cascade)
+  supplier    Connection @relation("SupplierLink", fields: [supplierId], references: [id], onDelete: Cascade)
+  createdBy   User       @relation("CreatedLinks", fields: [createdById], references: [id])
+
+  @@unique([customerId, supplierId])
+  @@map("customer_supplier_links")
+}
+

@@ -107,20 +107,20 @@ describe('FinanceService ledger movements', () => {
       type: 'SALE',
     });
 
-    expect(getBalance().toString()).toBe('100.5');
-    expect(result.newBalance.toString()).toBe('100.5');
+    expect(getBalance().toString()).toBe('-100.5');
+    expect(result.newBalance.toString()).toBe('-100.5');
     expect(tx.transaction.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         transactionType: 'SALE',
         amount: '100.5',
         senderId: requesterId,
         receiverId,
-        balanceAfter: '100.5',
+        balanceAfter: '-100.5',
       }),
     });
     expect(tx.account.update).toHaveBeenLastCalledWith({
       where: { id: accountId },
-      data: { totalCredit: '100.5', totalDebit: '0' },
+      data: { totalCredit: '0', totalDebit: '100.5' },
     });
   });
 
@@ -205,9 +205,9 @@ describe('FinanceService ledger movements', () => {
     expect(prisma.account.update).toHaveBeenCalledWith({
       where: { id: accountId },
       data: {
-        balance: '60',
-        totalCredit: '60',
-        totalDebit: '0',
+        balance: '-140',
+        totalCredit: '0',
+        totalDebit: '140',
       },
     });
   });

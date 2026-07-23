@@ -146,4 +146,109 @@ export class SubscriptionsController {
   async deletePlan(@Param('id') id: string) {
     return this.subscriptionsService.deletePlan(id);
   }
+
+  // =========================================================================
+  // ADMIN SUBSCRIPTION MANAGEMENT ENDPOINTS
+  // =========================================================================
+
+  @Get('admin/list')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  async getAdminSubscriptionsList(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('search') search?: string,
+    @Query('filter') filter?: string,
+  ) {
+    return this.subscriptionsService.getAdminSubscriptionsList({
+      page,
+      limit,
+      search,
+      filter,
+    });
+  }
+
+  @Post('admin/renew')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  async renewSubscriptionAdmin(
+    @Request() req: any,
+    @Body()
+    dto: {
+      businessId: string;
+      durationType: 'MONTHLY' | '3_MONTHS' | '6_MONTHS' | 'YEARLY' | 'CUSTOM';
+      customDays?: number;
+      notes?: string;
+    },
+  ) {
+    return this.subscriptionsService.renewSubscriptionAdmin(
+      req.user.userId,
+      dto,
+    );
+  }
+
+  @Put('admin/modify-duration')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  async modifySubscriptionDurationAdmin(
+    @Request() req: any,
+    @Body()
+    dto: {
+      businessId: string;
+      endDate?: string;
+      days?: number;
+    },
+  ) {
+    return this.subscriptionsService.modifySubscriptionDurationAdmin(
+      req.user.userId,
+      dto,
+    );
+  }
+
+  @Post('admin/suspend')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  async suspendSubscriptionAdmin(
+    @Request() req: any,
+    @Body() dto: { businessId: string; reason?: string },
+  ) {
+    return this.subscriptionsService.suspendSubscriptionAdmin(
+      req.user.userId,
+      dto.businessId,
+      dto.reason,
+    );
+  }
+
+  @Post('admin/activate-subscription')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  async activateSubscriptionAdmin(
+    @Request() req: any,
+    @Body() dto: { businessId: string },
+  ) {
+    return this.subscriptionsService.activateSubscriptionAdmin(
+      req.user.userId,
+      dto.businessId,
+    );
+  }
+
+  @Post('admin/send-notification')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  async sendSubscriptionNotificationAdmin(
+    @Request() req: any,
+    @Body() dto: { userId: string; title: string; message: string },
+  ) {
+    return this.subscriptionsService.sendSubscriptionNotificationAdmin(
+      req.user.userId,
+      dto,
+    );
+  }
+
+  @Get('admin/history/:businessId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  async getSubscriptionHistoryAdmin(@Param('businessId') businessId: string) {
+    return this.subscriptionsService.getSubscriptionHistoryAdmin(businessId);
+  }
 }

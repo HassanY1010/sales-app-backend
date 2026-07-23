@@ -9,8 +9,29 @@ import {
 } from 'class-validator';
 
 export class UpdateOrderStatusDto {
-  @IsEnum(['PENDING', 'ACCEPTED', 'REJECTED', 'COMPLETED', 'CANCELLED'])
-  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'COMPLETED' | 'CANCELLED';
+  @IsEnum([
+    'PENDING',
+    'ACCEPTED',
+    'REJECTED',
+    'COMPLETED',
+    'CANCELLED',
+    'SUBMITTED',
+    'RECEIVED',
+    'UNDER_REVIEW',
+    'PRICED',
+    'RESUBMITTED',
+  ])
+  status:
+    | 'PENDING'
+    | 'ACCEPTED'
+    | 'REJECTED'
+    | 'COMPLETED'
+    | 'CANCELLED'
+    | 'SUBMITTED'
+    | 'RECEIVED'
+    | 'UNDER_REVIEW'
+    | 'PRICED'
+    | 'RESUBMITTED';
 
   @IsOptional()
   @IsString()

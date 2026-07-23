@@ -52,4 +52,16 @@ export class CreateTransactionDto {
   @IsString()
   @IsOptional()
   transferNumber?: string;
+
+  @IsString()
+  @IsOptional()
+  connectionId?: string;
+
+  @IsString()
+  @IsOptional()
+  sourceScreen?: string;
+
+  @IsString()
+  @IsOptional()
+  clientId?: string; // Device-generated UUID — used for idempotency (offline sync dedup)
 }

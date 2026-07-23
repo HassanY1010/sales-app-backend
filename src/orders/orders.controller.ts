@@ -20,12 +20,16 @@ import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { RolesGuard } from '../core/guards/roles.guard';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
 import { Roles } from '../core/decorators/roles.decorator';
+import { AuditService } from '../audit/audit.service';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('business', 'individual') // Merchants and Consumers can both access orders
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post()
   async createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
@@ -51,7 +55,21 @@ export class OrdersController {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.ordersService.getOrderById(user.businessId, id);
+    const order = await this.ordersService.getOrderById(user.businessId, id);
+
+    await this.auditService.record({
+      userId: user.userId,
+      businessId: user.businessId,
+      action: 'OPEN',
+      resource: 'ORDER',
+      resourceId: id,
+      details: {
+        documentNumber: order.orderNumber,
+        status: order.status,
+      },
+    });
+
+    return order;
   }
 
   @Patch(':id/status')

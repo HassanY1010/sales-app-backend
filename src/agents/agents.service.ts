@@ -8,9 +8,14 @@ import { PrismaService } from '../database/prisma.service';
 import { AgentStatus, CommissionType, Prisma } from '@prisma/client';
 import * as crypto from 'crypto';
 
+import { NotificationsService } from '../notifications/notifications.service';
+
 @Injectable()
 export class AgentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   private generateCode(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -61,7 +66,7 @@ export class AgentsService {
       }
     }
 
-    return this.prisma.agent.create({
+    const agent = await this.prisma.agent.create({
       data: {
         userId,
         referralCode,
@@ -79,6 +84,24 @@ export class AgentsService {
         region: true,
       },
     });
+
+    // Send push & in-app notification to the assigned delivery representative
+    try {
+      await this.notificationsService.notifyUser(
+        userId,
+        'تم تعيينك كمندوب',
+        'تم تفعيل حسابك كمندوب توصيل، يمكنك الآن إدارة الطلبات الخاصة بك.',
+        {
+          notificationType: 'DELIVERY_REPRESENTATIVE_ASSIGNED',
+          type: 'DELIVERY_REPRESENTATIVE_ASSIGNED',
+          entityType: 'DELIVERY_REPRESENTATIVE',
+          entityId: agent.id,
+          route: '/delivery-representatives',
+        },
+      );
+    } catch (_) {}
+
+    return agent;
   }
 
   async findAll() {
@@ -175,7 +198,7 @@ export class AgentsService {
       status?: AgentStatus;
     },
   ) {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
 
     const updateData: any = {};
     if (data.regionId !== undefined) updateData.regionId = data.regionId;
@@ -185,7 +208,7 @@ export class AgentsService {
       updateData.commissionValue = new Prisma.Decimal(data.commissionValue);
     if (data.status !== undefined) updateData.status = data.status;
 
-    return this.prisma.agent.update({
+    const updated = await this.prisma.agent.update({
       where: { id },
       data: updateData,
       include: {
@@ -200,6 +223,29 @@ export class AgentsService {
         region: true,
       },
     });
+
+    // If status changed to ACTIVE, send notification
+    if (
+      data.status === AgentStatus.ACTIVE &&
+      existing.status !== AgentStatus.ACTIVE
+    ) {
+      try {
+        await this.notificationsService.notifyUser(
+          existing.userId,
+          'تم تعيينك كمندوب',
+          'تم تفعيل حسابك كمندوب توصيل، يمكنك الآن إدارة الطلبات الخاصة بك.',
+          {
+            notificationType: 'DELIVERY_REPRESENTATIVE_ASSIGNED',
+            type: 'DELIVERY_REPRESENTATIVE_ASSIGNED',
+            entityType: 'DELIVERY_REPRESENTATIVE',
+            entityId: updated.id,
+            route: '/delivery-representatives',
+          },
+        );
+      } catch (_) {}
+    }
+
+    return updated;
   }
 
   async getDashboardMetrics(agentId: string) {

@@ -224,7 +224,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(/سبب الرفض/);
     });
 
-    it('should throw BadRequestException when ACCEPTED order would exceed credit limit', async () => {
+    it('should reject order automatically with REJECTED status when ACCEPTED order would exceed credit limit', async () => {
       mockPrisma.order.findUnique.mockResolvedValue({
         id: 'order-1',
         senderId: 'biz-A',
@@ -236,6 +236,19 @@ describe('OrdersService', () => {
         orderNumber: 'ORD-001',
         currency: 'YER',
         dueDate: null,
+        items: [],
+      });
+
+      mockPrisma.order.update.mockResolvedValue({
+        id: 'order-1',
+        senderId: 'biz-A',
+        receiverId: 'biz-B',
+        status: 'REJECTED',
+        rejectionReason: 'Credit Limit Exceeded',
+        rejectedById: 'biz-B',
+        orderNumber: 'ORD-001',
+        total: '600',
+        currency: 'YER',
         items: [],
       });
 
@@ -262,14 +275,15 @@ describe('OrdersService', () => {
         return callback(txClient);
       });
 
-      await expect(
-        service.updateOrderStatus(
-          'biz-B',
-          'order-1',
-          { status: 'ACCEPTED' } as any,
-          'business',
-        ),
-      ).rejects.toThrow(/سقف المديونية/);
+      const result = await service.updateOrderStatus(
+        'biz-B',
+        'order-1',
+        { status: 'ACCEPTED' } as any,
+        'business',
+      );
+
+      expect(result.status).toBe('REJECTED');
+      expect(result.rejectionReason).toBe('Credit Limit Exceeded');
     });
   });
 

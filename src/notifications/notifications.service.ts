@@ -90,13 +90,33 @@ export class NotificationsService {
 
     if (!user?.pushToken) return;
 
+    // Calculate current unread count for the user
+    const unreadCount = await this.prisma.notification.count({
+      where: { userId, isRead: false },
+    });
+
     try {
       await admin.messaging().send({
         token: user.pushToken,
         notification: { title, body },
-        data: this.toFcmData(data),
+        data: {
+          ...this.toFcmData(data),
+          badge: unreadCount.toString(),
+        },
+        android: {
+          notification: {
+            notificationCount: unreadCount,
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              badge: unreadCount,
+            },
+          },
+        },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to send push notification: ${error.message}`);
     }
   }
@@ -110,19 +130,105 @@ export class NotificationsService {
     return this.notifyUser(userId, title, body, data);
   }
 
+  private ensureMandatoryMetadata(data?: NotificationPayload): NotificationPayload {
+    const payload = { ...(data || {}) };
+
+    // 1. Resolve entityId from common keys
+    if (!payload.entityId) {
+      const rawId = payload.recordId || payload.orderId || payload.connectionId || payload.transactionId || payload.paymentRequestId || payload.commissionId || payload.requestId;
+      if (rawId) {
+        payload.entityId = String(rawId);
+      }
+    }
+
+    // 2. Resolve notificationType and entityType
+    if (!payload.notificationType && payload.type) {
+      payload.notificationType = payload.type;
+    }
+    if (!payload.entityType) {
+      const typeLower = String(payload.type || '').toLowerCase();
+      if (typeLower.includes('invoice') || typeLower.includes('order')) {
+        payload.entityType = 'invoice';
+      } else if (typeLower.includes('receipt') || typeLower.includes('payment') || typeLower.includes('voucher')) {
+        payload.entityType = 'receipt_voucher';
+      } else if (typeLower.includes('link') || typeLower.includes('connection')) {
+        payload.entityType = 'link_request';
+      } else if (typeLower.includes('sync')) {
+        payload.entityType = 'sync';
+      } else if (typeLower.includes('representative') || typeLower.includes('delivery') || typeLower.includes('agent')) {
+        payload.entityType = 'DELIVERY_REPRESENTATIVE';
+      } else if (typeLower.includes('subscription')) {
+        payload.entityType = 'subscription';
+      } else if (typeLower.includes('password')) {
+        payload.entityType = 'USER';
+        payload.route = '/change-password';
+      } else {
+        payload.entityType = payload.type || 'system';
+      }
+    }
+
+    // 3. Resolve route if missing
+    if (!payload.route && payload.entityType) {
+      const entId = payload.entityId || '';
+      switch (payload.entityType) {
+        case 'DELIVERY_REPRESENTATIVE':
+        case 'delivery_representative':
+        case 'agent':
+          payload.route = '/delivery-representatives';
+          break;
+        case 'USER':
+        case 'user':
+        case 'password':
+          payload.route = '/change-password';
+          break;
+        case 'invoice':
+          payload.route = `/orders/${entId}`;
+          break;
+        case 'receipt_voucher':
+          payload.route = `/receipt-vouchers/${entId}`;
+          break;
+        case 'link_request':
+          payload.route = entId ? `/connections?requestId=${entId}` : `/connections`;
+          break;
+        case 'customer':
+          payload.route = `/customers/${entId}`;
+          break;
+        case 'supplier':
+          payload.route = `/suppliers/${entId}`;
+          break;
+        case 'sync':
+          payload.route = `/settings/backup`;
+          break;
+        case 'subscription':
+          payload.route = payload.type === 'SUBSCRIPTION_EXPIRED' ? '/subscription-expired' : '/settings/subscription';
+          break;
+        default:
+          payload.route = `/notifications`;
+      }
+    }
+
+    // 4. Ensure additionalData is present
+    if (!payload.additionalData) {
+      payload.additionalData = {};
+    }
+
+    return payload;
+  }
+
   async notifyUser(
     userId: string,
     title: string,
     body: string,
     data?: NotificationPayload,
   ) {
+    const resolvedData = this.ensureMandatoryMetadata(data);
     const notification = await this.prisma.notification.create({
       data: {
         userId,
         title,
         body,
-        type: data?.type,
-        metadata: data ? (data as any) : undefined,
+        type: resolvedData.notificationType,
+        metadata: resolvedData ? (resolvedData as any) : undefined,
       },
     });
 
@@ -133,11 +239,11 @@ export class NotificationsService {
 
     const payload = {
       ...notification,
-      data: data ?? {},
+      data: resolvedData,
     };
 
     this.eventsGateway.emitToUserBusiness(user?.business?.id, payload);
-    await this.sendFcm(userId, title, body, data);
+    await this.sendFcm(userId, title, body, resolvedData);
 
     return notification;
   }

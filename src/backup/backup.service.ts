@@ -100,6 +100,8 @@ export class BackupService implements OnModuleInit {
       ]);
 
       return {
+        appName: 'حسابك في جيبك',
+        appIdentifier: 'com.salesapp.business_manager',
         version: 2,
         exportDate: new Date().toISOString(),
         businessId,
@@ -122,8 +124,8 @@ export class BackupService implements OnModuleInit {
   async restoreData(businessId: string, backupData: any) {
     this.logger.log(`Restoring data for business: ${businessId}`);
 
-    if (!backupData || backupData.businessId !== businessId) {
-      throw new BadRequestException('ملف النسخ الاحتياطي لا يخص هذا الحساب');
+    if (!backupData) {
+      throw new BadRequestException('النسخة الاحتياطية غير صالحة أو تالفة.');
     }
 
     this.validateBackupPayload(backupData);
@@ -601,26 +603,30 @@ export class BackupService implements OnModuleInit {
   }
 
   private validateBackupPayload(backupData: any) {
-    if (backupData.version !== 2) {
-      throw new BadRequestException('Unsupported backup version');
+    if (backupData.version !== 2 && backupData.version !== 1) {
+      throw new BadRequestException('النسخة الاحتياطية غير صالحة أو تالفة.');
     }
 
     if (!backupData.data || typeof backupData.data !== 'object') {
-      throw new BadRequestException('Invalid backup payload');
+      throw new BadRequestException('النسخة الاحتياطية غير صالحة أو تالفة.');
     }
 
     for (const key of [
       'connections',
+      'customers',
+      'suppliers',
       'accounts',
       'orders',
+      'invoices',
       'transactions',
+      'receipts',
       'notifications',
     ]) {
       if (
         backupData.data[key] !== undefined &&
         !Array.isArray(backupData.data[key])
       ) {
-        throw new BadRequestException(`Invalid backup collection: ${key}`);
+        throw new BadRequestException('النسخة الاحتياطية غير صالحة أو تالفة.');
       }
     }
   }

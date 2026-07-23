@@ -15,6 +15,7 @@ import { randomBytes } from 'crypto';
 
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
+import { FinanceService } from '../finance/finance.service';
 
 @Injectable()
 export class ConnectionsService {
@@ -22,9 +23,10 @@ export class ConnectionsService {
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
     private readonly eventsGateway: EventsGateway,
+    private readonly financeService: FinanceService,
   ) {}
 
-  private normalizeConnection(connection: any, businessId: string) {
+  private normalizeConnection(connection: any, businessId: string, includeLinks = true) {
     if (!connection) return null;
     const plainConnection = JSON.parse(JSON.stringify(connection));
     const isRequester = plainConnection.requesterId === businessId;
@@ -56,10 +58,42 @@ export class ConnectionsService {
       result.business = isRequester ? plainConnection.receiver : plainConnection.requester;
     }
 
+    if (includeLinks) {
+      let linkedConnection: any = null;
+      let linkedConnectionId: string | null = null;
+      
+      const activeCustomerLink = plainConnection.customerLinks?.find(
+        (l: any) => l.status === 'ACTIVE',
+      );
+      const activeSupplierLink = plainConnection.supplierLinks?.find(
+        (l: any) => l.status === 'ACTIVE',
+      );
+
+      if (activeCustomerLink && activeCustomerLink.supplier) {
+        linkedConnectionId = activeCustomerLink.supplierId;
+        linkedConnection = this.normalizeConnection(
+          activeCustomerLink.supplier,
+          businessId,
+          false,
+        );
+      } else if (activeSupplierLink && activeSupplierLink.customer) {
+        linkedConnectionId = activeSupplierLink.customerId;
+        linkedConnection = this.normalizeConnection(
+          activeSupplierLink.customer,
+          businessId,
+          false,
+        );
+      }
+
+      result.linkedConnectionId = linkedConnectionId;
+      result.linkedConnection = linkedConnection;
+      result.linkedConnectionLinkId = activeCustomerLink?.id || activeSupplierLink?.id || null;
+    }
+
     return result;
   }
 
-  async createConnection(businessId: string, dto: CreateConnectionDto) {
+  async createConnection(businessId: string, userId: string, dto: CreateConnectionDto) {
     if (businessId === dto.receiverId) {
       throw new BadRequestException('لا يمكنك الارتباط بنفسك');
     }
@@ -73,21 +107,25 @@ export class ConnectionsService {
       throw new NotFoundException('الحساب المطلوب غير موجود أو غير نشط');
     }
 
+    const requestedRole = dto.connectionType; // 'CUSTOMER' or 'SUPPLIER'
+    const invertedRole = requestedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER';
+
     const connection = await this.prisma.connection.findFirst({
       where: {
         OR: [
-          { requesterId: businessId, receiverId: dto.receiverId },
-          { requesterId: dto.receiverId, receiverId: businessId },
+          { requesterId: businessId, receiverId: dto.receiverId, connectionType: requestedRole },
+          { requesterId: dto.receiverId, receiverId: businessId, connectionType: invertedRole },
         ],
       },
     });
 
+    let finalConnection: any;
+
     if (connection) {
       // 1. If currently accepted or pending, it's a conflict
       if (connection.status === 'ACCEPTED' || connection.status === 'PENDING') {
-        throw new ConflictException(
-          `الارتباط موجود بالفعل أو قيد الانتظار (${connection.status})`,
-        );
+        const msg = requestedRole === 'CUSTOMER' ? 'هذا العميل موجود بالفعل' : 'هذا المورد موجود بالفعل';
+        throw new ConflictException(msg);
       }
 
       // 2. If blocked, users must handle unblocking first
@@ -119,14 +157,15 @@ export class ConnectionsService {
         }
 
         // Reset to pending
-        const updated = await this.prisma.connection.update({
+        finalConnection = await this.prisma.connection.update({
           where: { id: connection.id },
           data: {
             status: 'PENDING',
-            requesterId: businessId, // Ensure the new requester is current user
+            requesterId: businessId,
             receiverId: dto.receiverId,
             connectionType: dto.connectionType,
             retryCount: { increment: 1 },
+            isReadReceiver: false,
             lastRequestedAt: new Date(),
           },
           include: {
@@ -134,47 +173,77 @@ export class ConnectionsService {
             receiver: { include: { user: true } },
           },
         });
-        return this.normalizeConnection(updated, businessId);
       }
+    } else {
+      // 4. Create new connection if none exists
+      finalConnection = await this.prisma.connection.create({
+        data: {
+          requesterId: businessId,
+          receiverId: dto.receiverId,
+          connectionType: dto.connectionType,
+          isReadReceiver: false,
+          lastRequestedAt: new Date(),
+        },
+        include: {
+          requester: true,
+          receiver: { include: { user: true } },
+        },
+      });
     }
 
-    // 4. Create new connection if none exists
-    const newConnection = await this.prisma.connection.create({
+    // 5. Audit Log
+    await this.prisma.auditLog.create({
       data: {
-        requesterId: businessId,
-        receiverId: dto.receiverId,
-        connectionType: dto.connectionType,
-        lastRequestedAt: new Date(),
-      },
-      include: {
-        requester: true,
-        receiver: { include: { user: true } },
+        userId,
+        businessId,
+        action: 'CREATE_CONNECTION_REQUEST',
+        resource: 'CONNECTION',
+        resourceId: finalConnection.id,
+        details: {
+          oldStatus: connection ? connection.status : 'NONE',
+          newStatus: 'PENDING',
+          connectionType: dto.connectionType,
+        },
       },
     });
 
-    // 5. Send Notification (using inverted type so receiver sees correct relationship)
+    // 6. Send Notification (using inverted type so receiver sees correct relationship)
+    const isSupplierRequest = dto.connectionType === 'CUSTOMER';
+    const customerId = isSupplierRequest ? dto.receiverId : businessId;
+    const supplierId = isSupplierRequest ? businessId : dto.receiverId;
+
     await this.notificationsService.sendPushNotification(
-      newConnection.receiver.user.id,
+      finalConnection.receiver.user.id,
       'طلب ارتباط جديد',
-      `يريد ${newConnection.requester.name} الارتباط بحسابك كـ ${dto.connectionType === 'SUPPLIER' ? 'عميل' : 'مورد'}`,
-      { type: 'NEW_CONNECTION_REQUEST', connectionId: newConnection.id },
+      `يريد ${finalConnection.requester.name} الارتباط بحسابك.`,
+      {
+        type: 'connection_request',
+        notificationType: 'connection_request',
+        entityType: 'connection_request',
+        entityId: finalConnection.id,
+        route: `app://connection-request/${finalConnection.id}`,
+        requestId: finalConnection.id,
+        customerId,
+        supplierId,
+      },
     );
 
     this.eventsGateway.emitToBusiness(
       dto.receiverId,
       'NEW_CONNECTION_REQUEST',
       {
-        id: newConnection.id,
-        requesterName: newConnection.requester.name,
+        id: finalConnection.id,
+        requesterName: finalConnection.requester.name,
         connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
       },
     );
 
-    return this.normalizeConnection(newConnection, businessId);
+    return this.normalizeConnection(finalConnection, businessId);
   }
 
   async acceptConnection(
     businessId: string,
+    userId: string,
     connectionId: string,
     options?: {
       creditLimit?: number;
@@ -250,6 +319,14 @@ export class ConnectionsService {
           account: true,
           requester: { include: { user: true } },
           receiver: true,
+          customerLinks: {
+            where: { status: 'ACTIVE' },
+            include: { supplier: { include: { requester: true, receiver: true } } },
+          },
+          supplierLinks: {
+            where: { status: 'ACTIVE' },
+            include: { customer: { include: { requester: true, receiver: true } } },
+          },
         },
       });
 
@@ -272,6 +349,8 @@ export class ConnectionsService {
         // Log the opening balance in audit
         await prisma.auditLog.create({
           data: {
+            userId,
+            businessId,
             action: 'CREATE',
             resource: 'ACCOUNT',
             resourceId: updated.account!.id,
@@ -285,12 +364,35 @@ export class ConnectionsService {
         });
       }
 
+      // Log connection accept in audit
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          businessId,
+          action: 'ACCEPT_CONNECTION_REQUEST',
+          resource: 'CONNECTION',
+          resourceId: connectionId,
+          details: {
+            oldStatus: 'PENDING',
+            newStatus: 'ACCEPTED',
+          },
+        },
+      });
+
       // Notify the requester
       await this.notificationsService.sendPushNotification(
         updated.requester.user.id,
         'تم قبول طلب الارتباط',
         `لقد قبل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
-        { type: 'CONNECTION_ACCEPTED', connectionId: updated.id },
+        {
+          type: 'connection_approved',
+          notificationType: 'connection_approved',
+          entityType: 'connection_request',
+          entityId: updated.id,
+          route: `app://connection-request/${updated.id}`,
+          requestId: updated.id,
+          supplierId: businessId,
+        },
       );
 
       this.eventsGateway.emitToBusiness(
@@ -306,7 +408,7 @@ export class ConnectionsService {
     });
   }
 
-  async rejectConnection(businessId: string, connectionId: string) {
+  async rejectConnection(businessId: string, userId: string, connectionId: string) {
     const connection = await this.prisma.connection.findUnique({
       where: { id: connectionId },
     });
@@ -334,12 +436,34 @@ export class ConnectionsService {
       },
     });
 
+    // Log rejection in audit
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'REJECT_CONNECTION_REQUEST',
+        resource: 'CONNECTION',
+        resourceId: connectionId,
+        details: {
+          oldStatus: 'PENDING',
+          newStatus: 'REJECTED',
+        },
+      },
+    });
+
     // Notify the requester
     await this.notificationsService.sendPushNotification(
       updated.requester.user.id,
       'تم رفض طلب الارتباط',
       `لقد تم رفض طلب الارتباط من قبل ${updated.receiver.name}.`,
-      { type: 'CONNECTION_REJECTED', connectionId: updated.id },
+      {
+        type: 'connection_rejected',
+        notificationType: 'connection_rejected',
+        entityType: 'connection_request',
+        entityId: updated.id,
+        route: `app://connection-request/${updated.id}`,
+        requestId: updated.id,
+      },
     );
 
     this.eventsGateway.emitToBusiness(
@@ -414,6 +538,14 @@ export class ConnectionsService {
             },
           },
           account: true,
+          customerLinks: {
+            where: { status: 'ACTIVE' },
+            include: { supplier: { include: { requester: true, receiver: true } } },
+          },
+          supplierLinks: {
+            where: { status: 'ACTIVE' },
+            include: { customer: { include: { requester: true, receiver: true } } },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
@@ -586,17 +718,21 @@ export class ConnectionsService {
       });
     }
 
+    const requestedRole = connectionType || 'CUSTOMER';
+    const invertedRole = requestedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER';
+
     const existing = await this.prisma.connection.findFirst({
       where: {
         OR: [
-          { requesterId: myBusinessId, receiverId: targetBusiness.id },
-          { requesterId: targetBusiness.id, receiverId: myBusinessId },
+          { requesterId: myBusinessId, receiverId: targetBusiness.id, connectionType: requestedRole },
+          { requesterId: targetBusiness.id, receiverId: myBusinessId, connectionType: invertedRole },
         ],
       },
     });
 
     if (existing && existing.status === 'ACCEPTED') {
-      throw new ConflictException('الارتباط موجود بالفعل');
+      const msg = requestedRole === 'CUSTOMER' ? 'هذا العميل موجود بالفعل' : 'هذا المورد موجود بالفعل';
+      throw new ConflictException(msg);
     }
 
     if (existing) {
@@ -737,11 +873,6 @@ export class ConnectionsService {
           ...(terms.dueDate !== undefined && {
             dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
           }),
-          ...(dbOpeningBalance !== undefined && {
-            balance: dbOpeningBalance,
-            totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
-            totalDebit: dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
-          }),
         },
       });
 
@@ -789,6 +920,7 @@ export class ConnectionsService {
             });
           }
         }
+        await this.financeService.rebuildAccountBalance(account.id, tx);
       }
 
       await tx.auditLog.create({
@@ -801,7 +933,10 @@ export class ConnectionsService {
         },
       });
 
-      return updated;
+      // Return the fresh account state (fully rebuilt) from DB
+      return tx.account.findUnique({
+        where: { id: account.id },
+      });
     });
   }
 
@@ -882,6 +1017,446 @@ export class ConnectionsService {
     });
 
     return this.normalizeConnection(finalConnection, myBusinessId);
+  }
+
+  async getConnectionRequests(
+    businessId: string,
+    query: {
+      status?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    const status = query.status;
+    const search = query.search;
+    const startDate = query.startDate;
+    const endDate = query.endDate;
+    const page = Number(query.page || 1);
+    const limit = Number(query.limit || 10);
+
+    const where: any = {
+      OR: [{ requesterId: businessId }, { receiverId: businessId }],
+    };
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (search) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(search.trim());
+      where.AND = [
+        {
+          OR: [
+            ...(isUuid ? [
+              { id: { equals: search.trim() } },
+            ] : []),
+            { requester: { name: { contains: search, mode: 'insensitive' } } },
+            { receiver: { name: { contains: search, mode: 'insensitive' } } },
+            { requester: { phoneNumber: { contains: search } } },
+            { receiver: { phoneNumber: { contains: search } } },
+          ],
+        },
+      ];
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt.gte = new Date(startDate);
+      }
+      if (endDate) {
+        where.createdAt.lte = new Date(endDate);
+      }
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.connection.findMany({
+        where,
+        include: {
+          requester: {
+            include: {
+              user: {
+                select: { id: true, fullName: true, userType: true, isActive: true },
+              },
+            },
+          },
+          receiver: {
+            include: {
+              user: {
+                select: { id: true, fullName: true, userType: true, isActive: true },
+              },
+            },
+          },
+          account: true,
+          customerLinks: {
+            where: { status: 'ACTIVE' },
+            include: { supplier: { include: { requester: true, receiver: true } } },
+          },
+          supplierLinks: {
+            where: { status: 'ACTIVE' },
+            include: { customer: { include: { requester: true, receiver: true } } },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.connection.count({ where }),
+    ]);
+
+    const normalizedData = data.map((item) => this.normalizeConnection(item, businessId));
+
+    return {
+      data: normalizedData,
+      meta: {
+        total,
+        page,
+        lastPage: Math.ceil(total / limit),
+        limit,
+      },
+    };
+  }
+
+  async getConnectionRequestsStats(businessId: string) {
+    const [pending, incomingPending, outgoingPending, unreadPending] = await Promise.all([
+      this.prisma.connection.count({
+        where: {
+          status: 'PENDING',
+          OR: [{ requesterId: businessId }, { receiverId: businessId }],
+        },
+      }),
+      this.prisma.connection.count({
+        where: {
+          status: 'PENDING',
+          receiverId: businessId,
+        },
+      }),
+      this.prisma.connection.count({
+        where: {
+          status: 'PENDING',
+          requesterId: businessId,
+        },
+      }),
+      this.prisma.connection.count({
+        where: {
+          status: 'PENDING',
+          receiverId: businessId,
+          isReadReceiver: false,
+        },
+      }),
+    ]);
+
+    return {
+      pending,
+      incomingPending,
+      outgoingPending,
+      unreadPending,
+    };
+  }
+
+  async markConnectionRequestsAsRead(businessId: string) {
+    const result = await this.prisma.connection.updateMany({
+      where: {
+        receiverId: businessId,
+        status: 'PENDING',
+        isReadReceiver: false,
+      },
+      data: {
+        isReadReceiver: true,
+      },
+    });
+
+    return { count: result.count };
+  }
+
+  async getConnectionRequestDetails(businessId: string, userId: string, id: string) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id },
+      include: {
+        requester: {
+          include: {
+            user: {
+              select: { id: true, fullName: true, userType: true, isActive: true },
+            },
+          },
+        },
+        receiver: {
+          include: {
+            user: {
+              select: { id: true, fullName: true, userType: true, isActive: true },
+            },
+          },
+        },
+        account: true,
+        customerLinks: {
+          where: { status: 'ACTIVE' },
+          include: { supplier: { include: { requester: true, receiver: true } } },
+        },
+        supplierLinks: {
+          where: { status: 'ACTIVE' },
+          include: { customer: { include: { requester: true, receiver: true } } },
+        },
+      },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    if (
+      connection.requesterId !== businessId &&
+      connection.receiverId !== businessId
+    ) {
+      throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
+    }
+
+    // Mark as read if the recipient views it
+    if (connection.receiverId === businessId && !connection.isReadReceiver) {
+      await this.prisma.connection.update({
+        where: { id },
+        data: { isReadReceiver: true },
+      });
+      connection.isReadReceiver = true;
+    }
+
+    // Create audit log for view request
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'VIEW_CONNECTION_REQUEST',
+        resource: 'CONNECTION',
+        resourceId: id,
+        details: {
+          status: connection.status,
+          timestamp: new Date().toISOString(),
+        },
+      },
+    });
+
+    return this.normalizeConnection(connection, businessId);
+  }
+
+  async getConnectionRequestAudit(businessId: string, id: string) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    if (
+      connection.requesterId !== businessId &&
+      connection.receiverId !== businessId
+    ) {
+      throw new ForbiddenException('ليس لديك صلاحية على هذا الارتباط');
+    }
+
+    return this.prisma.auditLog.findMany({
+      where: {
+        resource: 'CONNECTION',
+        resourceId: id,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async cancelConnection(businessId: string, userId: string, connectionId: string) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id: connectionId },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    if (connection.requesterId !== businessId) {
+      throw new BadRequestException('فقط مرسل الطلب يمكنه إلغاء الارتباط');
+    }
+
+    if (connection.status !== 'PENDING') {
+      throw new BadRequestException(`الارتباط بالفعل ${connection.status}`);
+    }
+
+    const updated = await this.prisma.connection.update({
+      where: { id: connectionId },
+      data: { status: 'CANCELLED' },
+      include: {
+        requester: { include: { user: true } },
+        receiver: true,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'CANCEL_CONNECTION_REQUEST',
+        resource: 'CONNECTION',
+        resourceId: connectionId,
+        details: { oldStatus: 'PENDING', newStatus: 'CANCELLED' },
+      },
+    });
+
+    return this.normalizeConnection(updated, businessId);
+  }
+
+  async linkConnections(
+    businessId: string,
+    userId: string,
+    dto: { customerId: string; supplierId: string }
+  ) {
+    const [customerConn, supplierConn] = await Promise.all([
+      this.prisma.connection.findUnique({
+        where: { id: dto.customerId },
+        include: {
+          customerLinks: { where: { status: 'ACTIVE' } },
+          supplierLinks: { where: { status: 'ACTIVE' } }
+        }
+      }),
+      this.prisma.connection.findUnique({
+        where: { id: dto.supplierId },
+        include: {
+          customerLinks: { where: { status: 'ACTIVE' } },
+          supplierLinks: { where: { status: 'ACTIVE' } }
+        }
+      }),
+    ]);
+
+    if (!customerConn || !supplierConn) {
+      throw new NotFoundException('أحد الارتباطات غير موجود');
+    }
+
+    // Verify ownership
+    if (
+      (customerConn.requesterId !== businessId && customerConn.receiverId !== businessId) ||
+      (supplierConn.requesterId !== businessId && supplierConn.receiverId !== businessId)
+    ) {
+      throw new ForbiddenException('ليس لديك صلاحية على أحد الارتباطات');
+    }
+
+    // Verify counterparty is the same
+    const customerOther = customerConn.requesterId === businessId ? customerConn.receiverId : customerConn.requesterId;
+    const supplierOther = supplierConn.requesterId === businessId ? supplierConn.receiverId : supplierConn.requesterId;
+
+    if (customerOther !== supplierOther) {
+      throw new BadRequestException('يجب أن يكون العميل والمورد لنفس الشركة/الطرف الثاني');
+    }
+
+    // Check if already linked
+    const isCustomerLinked = customerConn.customerLinks.length > 0 || customerConn.supplierLinks.length > 0;
+    const isSupplierLinked = supplierConn.customerLinks.length > 0 || supplierConn.supplierLinks.length > 0;
+
+    if (isCustomerLinked || isSupplierLinked) {
+      throw new BadRequestException('أحد السجلات مرتبط بالفعل بحساب آخر');
+    }
+
+    const link = await this.prisma.customerSupplierLink.create({
+      data: {
+        customerId: dto.customerId,
+        supplierId: dto.supplierId,
+        createdById: userId,
+        status: 'ACTIVE',
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'LINK_CREATED',
+        resource: 'CONNECTION',
+        resourceId: dto.customerId,
+        details: {
+          customerId: dto.customerId,
+          supplierId: dto.supplierId,
+          linkId: link.id,
+        },
+      },
+    });
+
+    return link;
+  }
+
+  async unlinkConnections(businessId: string, userId: string, linkId: string) {
+    const link = await this.prisma.customerSupplierLink.findUnique({
+      where: { id: linkId },
+    });
+
+    if (!link) {
+      throw new NotFoundException('رابط الارتباط غير موجود');
+    }
+
+    // Delete link
+    await this.prisma.customerSupplierLink.delete({
+      where: { id: linkId },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        businessId,
+        action: 'LINK_REMOVED',
+        resource: 'CONNECTION',
+        resourceId: link.customerId,
+        details: {
+          customerId: link.customerId,
+          supplierId: link.supplierId,
+          linkId: link.id,
+        },
+      },
+    });
+
+    return { success: true };
+  }
+
+  async getLinkableConnections(businessId: string, connectionId: string) {
+    const connection = await this.prisma.connection.findUnique({
+      where: { id: connectionId },
+    });
+
+    if (!connection) {
+      throw new NotFoundException('الارتباط غير موجود');
+    }
+
+    const otherPartyId = connection.requesterId === businessId ? connection.receiverId : connection.requesterId;
+
+    // Check if this connection is a Customer or Supplier from our perspective
+    const isCustomer = (connection.requesterId === businessId && connection.connectionType === 'CUSTOMER') ||
+                       (connection.receiverId === businessId && connection.connectionType === 'SUPPLIER');
+
+    const oppositeType = isCustomer ? 'SUPPLIER' : 'CUSTOMER';
+
+    // Find connections with the same otherPartyId that are of the opposite type
+    // and not already linked
+    const candidates = await this.prisma.connection.findMany({
+      where: {
+        OR: [
+          { requesterId: businessId, receiverId: otherPartyId, connectionType: oppositeType },
+          { requesterId: otherPartyId, receiverId: businessId, connectionType: isCustomer ? 'CUSTOMER' : 'SUPPLIER' },
+        ],
+        status: 'ACCEPTED',
+      },
+      include: {
+        requester: true,
+        receiver: true,
+        customerLinks: true,
+        supplierLinks: true,
+      },
+    });
+
+    // Filter out already linked candidates
+    const filtered = candidates.filter(c => {
+      const isLinked = c.customerLinks.some(l => l.status === 'ACTIVE') ||
+                       c.supplierLinks.some(l => l.status === 'ACTIVE');
+      return !isLinked;
+    });
+
+    return filtered.map(c => this.normalizeConnection(c, businessId));
   }
 }
 

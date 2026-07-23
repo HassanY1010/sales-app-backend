@@ -285,6 +285,26 @@ export class AdminService {
       resetById: adminId,
     });
 
+    // Send in-app and push notification to the user
+    try {
+      await this.notificationsService.notifyUser(
+        userId,
+        'تم تغيير كلمة المرور',
+        'تم إعادة تعيين كلمة المرور الخاصة بك. يرجى الدخول باستخدام كلمة المرور الجديدة ثم تغييرها إلى كلمة مرور خاصة بك لا تنساها.',
+        {
+          notificationType: 'PASSWORD_RESET',
+          type: 'PASSWORD_RESET',
+          entityType: 'USER',
+          entityId: userId,
+          route: '/change-password',
+        },
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `Failed to send password reset notification to user ${userId}: ${err.message}`,
+      );
+    }
+
     return { success: true, temporaryPassword, expiryDate };
   }
 

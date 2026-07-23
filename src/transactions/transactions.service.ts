@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
@@ -24,6 +25,17 @@ export class TransactionsService {
     const actualSenderId = recordsReceivedPayment ? dto.receiverId : senderId;
     const actualReceiverId = recordsReceivedPayment ? senderId : dto.receiverId;
 
+    // ── Idempotency guard: if this clientId was already processed, return existing ──
+    if (dto.clientId) {
+      const existing = await this.prisma.transaction.findUnique({
+        where: { clientId: dto.clientId },
+        include: { sender: true, receiver: true, order: true },
+      });
+      if (existing) {
+        return existing; // Duplicate request — safe to return existing record
+      }
+    }
+
     // Perform atomic transaction wrapping the movement
     return this.prisma.$transaction(async (tx) => {
       const { transaction } = await this.financeService.recordFinancialMovement(
@@ -39,6 +51,8 @@ export class TransactionsService {
           currency: dto.currency,
           dueDate: dto.dueDate,
           attachmentUrl: dto.attachmentUrl,
+          connectionId: dto.connectionId,
+          clientId: dto.clientId, // Pass through for storage
         },
       );
 
@@ -56,6 +70,7 @@ export class TransactionsService {
       return transaction;
     });
   }
+
 
   async getTransactions(businessId: string, query: GetTransactionsDto) {
     const { page = 1, limit = 10, relatedBusinessId, type } = query;
@@ -113,6 +128,40 @@ export class TransactionsService {
         lastPage: Math.ceil(total / limit),
         limit,
       },
+    };
+  }
+
+  async getTransactionById(businessId: string, id: string) {
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id },
+      include: {
+        sender: true,
+        receiver: true,
+        order: true,
+      },
+    });
+    if (!transaction) throw new NotFoundException('Transaction not found');
+
+    if (
+      transaction.senderId !== businessId &&
+      transaction.receiverId !== businessId
+    ) {
+      throw new ForbiddenException(
+        'You do not have access to this transaction',
+      );
+    }
+
+    return {
+      ...transaction,
+      direction: transaction.receiverId === businessId ? 'credit' : 'debit',
+      relatedUserId:
+        transaction.senderId === businessId
+          ? transaction.receiverId
+          : transaction.senderId,
+      relatedUserName:
+        transaction.senderId === businessId
+          ? transaction.receiver.name
+          : transaction.sender.name,
     };
   }
 
@@ -181,10 +230,18 @@ export class TransactionsService {
         });
 
         if (connection?.account) {
-          await this.financeService.rebuildAccountBalance(
+          const rebuiltAccount = await this.financeService.rebuildAccountBalance(
             connection.account.id,
             tx,
           );
+          const creditLimit = new Decimal(rebuiltAccount.creditLimit as any);
+          const currentDebit = new Decimal(rebuiltAccount.totalDebit as any);
+
+          if (creditLimit.greaterThan(0) && currentDebit.greaterThan(creditLimit)) {
+            throw new BadRequestException(
+              `تعذر تعديل السند: القيمة الجديدة تؤدي لتجاوز سقف المديونية للعميل. سقف المديونية: ${creditLimit.toFixed(2)}، الرصيد بعد التعديل: ${currentDebit.toFixed(2)}.`
+            );
+          }
         }
       }
 

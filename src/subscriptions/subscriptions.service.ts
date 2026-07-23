@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -10,7 +11,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CommissionsService } from '../commissions/commissions.service';
 
 @Injectable()
-export class SubscriptionsService {
+export class SubscriptionsService implements OnModuleInit {
   private readonly logger = new Logger(SubscriptionsService.name);
 
   constructor(
@@ -19,6 +20,10 @@ export class SubscriptionsService {
     private readonly notificationsService: NotificationsService,
     private readonly commissionsService: CommissionsService,
   ) {}
+
+  onModuleInit() {
+    this.checkAndSendExpiryNotifications().catch(() => {});
+  }
 
   async createPaymentRequest(
     userId: string,
@@ -246,7 +251,94 @@ export class SubscriptionsService {
     return { success: true, message: 'تم رفض طلب الدفع وتحديث العمولات' };
   }
 
+  /**
+   * Automatically check subscriptions expiring in 7, 3, 1 days or expired,
+   * sending notifications to affected users without duplicating.
+   */
+  async checkAndSendExpiryNotifications() {
+    try {
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+
+      const businesses = await this.prisma.business.findMany({
+        where: {
+          subscriptionExpiry: { not: null },
+        },
+        include: { user: true },
+      });
+
+      for (const b of businesses) {
+        if (!b.subscriptionExpiry || !b.userId) continue;
+
+        const expiryTime = b.subscriptionExpiry.getTime();
+        const diffMs = expiryTime - now.getTime();
+        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+        let title = '';
+        let body = '';
+        let notificationType = '';
+
+        if (diffDays === 7) {
+          title = 'تنبيه انتهاء الاشتراك';
+          body = 'متبقي 7 أيام على انتهاء اشتراكك، يرجى التجديد للاستمرار في استخدام التطبيق.';
+          notificationType = 'SUBSCRIPTION_EXPIRING_7_DAYS';
+        } else if (diffDays === 3) {
+          title = 'تنبيه انتهاء الاشتراك';
+          body = 'متبقي 3 أيام على انتهاء اشتراكك، يرجى تجديد الاشتراك.';
+          notificationType = 'SUBSCRIPTION_EXPIRING_3_DAYS';
+        } else if (diffDays === 1) {
+          title = 'تنبيه انتهاء الاشتراك';
+          body = 'غداً ينتهي اشتراكك، يرجى التجديد حتى يستمر استخدام التطبيق.';
+          notificationType = 'SUBSCRIPTION_EXPIRING_1_DAY';
+        } else if (diffDays <= 0 && b.subscriptionStatus !== 'EXPIRED') {
+          title = 'انتهى اشتراكك';
+          body = 'انتهت مدة اشتراكك في تطبيق حسابك في جيبك. لتجديد الاشتراك يرجى التواصل معنا عبر وسائل التواصل التالية.';
+          notificationType = 'SUBSCRIPTION_EXPIRED';
+
+          // Mark status as EXPIRED in DB
+          await this.prisma.business.update({
+            where: { id: b.id },
+            data: { subscriptionStatus: 'EXPIRED' },
+          });
+        }
+
+        if (notificationType) {
+          // Check if notification of this type was already sent today for this user
+          const existing = await this.prisma.notification.findFirst({
+            where: {
+              userId: b.userId,
+              type: notificationType,
+              createdAt: {
+                gte: new Date(`${todayStr}T00:00:00.000Z`),
+              },
+            },
+          });
+
+          if (!existing) {
+            await this.notificationsService.notifyUser(
+              b.userId,
+              title,
+              body,
+              {
+                notificationType,
+                type: notificationType,
+                entityType: 'SUBSCRIPTION',
+                entityId: b.id,
+                route: diffDays <= 0 ? '/subscription-expired' : '/settings/subscription',
+              },
+            );
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`Error in checkAndSendExpiryNotifications: ${err.message}`);
+    }
+  }
+
   async checkSubscription(userId: string) {
+    // Run background notification check
+    this.checkAndSendExpiryNotifications().catch(() => {});
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { business: true },
@@ -566,4 +658,437 @@ export class SubscriptionsService {
     await this.prisma.subscriptionPlan.delete({ where: { id } });
     return { success: true, message: 'تم حذف خطة الاشتراك بنجاح' };
   }
+
+  // =========================================================================
+  // ADMIN SUBSCRIPTION MANAGEMENT MODULE
+  // =========================================================================
+
+  async getAdminSubscriptionsList(params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    filter?: string;
+  }) {
+    const page = Number(params.page || 1);
+    const limit = Number(params.limit || 20);
+    const skip = (page - 1) * limit;
+    const now = new Date();
+
+    const searchStr = params.search?.trim();
+
+    const where: any = {};
+
+    if (searchStr) {
+      where.OR = [
+        { name: { contains: searchStr, mode: 'insensitive' } },
+        { phoneNumber: { contains: searchStr } },
+        { email: { contains: searchStr, mode: 'insensitive' } },
+        { user: { fullName: { contains: searchStr, mode: 'insensitive' } } },
+        { user: { phoneNumber: { contains: searchStr } } },
+      ];
+    }
+
+    if (params.filter === 'ACTIVE') {
+      where.subscriptionStatus = 'GOLD';
+      where.subscriptionExpiry = { gt: now };
+    } else if (params.filter === 'EXPIRED') {
+      where.OR = [
+        { subscriptionStatus: 'EXPIRED' },
+        { subscriptionExpiry: { lte: now } },
+      ];
+    } else if (params.filter === 'EXPIRING_7') {
+      const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      where.subscriptionExpiry = { gte: now, lte: in7Days };
+    } else if (params.filter === 'EXPIRING_30') {
+      const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      where.subscriptionExpiry = { gte: now, lte: in30Days };
+    } else if (params.filter === 'SUSPENDED') {
+      where.subscriptionStatus = 'SUSPENDED';
+    }
+
+    const [businesses, total] = await Promise.all([
+      this.prisma.business.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phoneNumber: true,
+              createdAt: true,
+            },
+          },
+        },
+      }),
+      this.prisma.business.count({ where }),
+    ]);
+
+    // Top Summary Statistics
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [totalSubscribers, activeSubscriptions, expiredSubscriptions, expiringSoon, newThisMonth] =
+      await Promise.all([
+        this.prisma.business.count(),
+        this.prisma.business.count({
+          where: {
+            subscriptionStatus: 'GOLD',
+            subscriptionExpiry: { gt: now },
+          },
+        }),
+        this.prisma.business.count({
+          where: {
+            OR: [
+              { subscriptionStatus: 'EXPIRED' },
+              { subscriptionExpiry: { lte: now } },
+            ],
+          },
+        }),
+        this.prisma.business.count({
+          where: {
+            subscriptionExpiry: {
+              gte: now,
+              lte: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+            },
+          },
+        }),
+        this.prisma.business.count({
+          where: {
+            createdAt: { gte: startOfMonth },
+          },
+        }),
+      ]);
+
+    const formattedData = businesses.map((b) => {
+      const expiry = b.subscriptionExpiry;
+      let calculatedStatus = 'ACTIVE';
+      let remainingDays = 0;
+
+      if (b.subscriptionStatus === 'SUSPENDED') {
+        calculatedStatus = 'SUSPENDED';
+      } else if (!expiry || expiry <= now) {
+        calculatedStatus = 'EXPIRED';
+        remainingDays = 0;
+      } else {
+        const diffMs = expiry.getTime() - now.getTime();
+        remainingDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        if (remainingDays <= 7) {
+          calculatedStatus = 'EXPIRING_SOON';
+        } else {
+          calculatedStatus = 'ACTIVE';
+        }
+      }
+
+      return {
+        id: b.id,
+        businessId: b.id,
+        userId: b.userId,
+        companyName: b.name,
+        userName: b.user.fullName,
+        phoneNumber: b.phoneNumber || b.user.phoneNumber,
+        email: b.email || b.user.email,
+        startDate: b.createdAt.toISOString(),
+        expirationDate: expiry ? expiry.toISOString() : null,
+        remainingDays,
+        status: calculatedStatus,
+        rawStatus: b.subscriptionStatus,
+      };
+    });
+
+    return {
+      data: formattedData,
+      summary: {
+        totalSubscribers,
+        activeSubscriptions,
+        expiredSubscriptions,
+        expiringSoon,
+        newThisMonth,
+      },
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async renewSubscriptionAdmin(
+    adminId: string,
+    dto: {
+      businessId: string;
+      durationType: 'MONTHLY' | '3_MONTHS' | '6_MONTHS' | 'YEARLY' | 'CUSTOM';
+      customDays?: number;
+      notes?: string;
+    },
+  ) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: dto.businessId },
+      include: { user: true },
+    });
+    if (!business) throw new NotFoundException('الشركة / المستخدم غير موجود');
+
+    let days = 365;
+    if (dto.durationType === 'MONTHLY') days = 30;
+    else if (dto.durationType === '3_MONTHS') days = 90;
+    else if (dto.durationType === '6_MONTHS') days = 180;
+    else if (dto.durationType === 'YEARLY') days = 365;
+    else if (dto.durationType === 'CUSTOM') days = dto.customDays || 30;
+
+    const now = new Date();
+    const baseDate =
+      business.subscriptionExpiry && business.subscriptionExpiry > now
+        ? business.subscriptionExpiry
+        : now;
+
+    const newExpiry = new Date(baseDate);
+    newExpiry.setDate(newExpiry.getDate() + days);
+
+    const updated = await this.prisma.business.update({
+      where: { id: dto.businessId },
+      data: {
+        subscriptionStatus: 'GOLD',
+        subscriptionExpiry: newExpiry,
+      },
+    });
+
+    // Audit log
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'RENEW_SUBSCRIPTION',
+        resource: 'SUBSCRIPTION',
+        resourceId: dto.businessId,
+        details: {
+          durationType: dto.durationType,
+          daysAdded: days,
+          oldExpiry: business.subscriptionExpiry
+            ? business.subscriptionExpiry.toISOString()
+            : null,
+          newExpiry: newExpiry.toISOString(),
+          notes: dto.notes,
+        },
+      },
+    });
+
+    // Format new expiration date string (e.g. DD/MM/YYYY)
+    const formattedDateStr = newExpiry.toISOString().split('T')[0];
+
+    // Notify user
+    try {
+      await this.notificationsService.notifyUser(
+        business.userId,
+        'تم تجديد اشتراكك',
+        `تم تجديد اشتراكك بنجاح حتى ${formattedDateStr}.`,
+        {
+          notificationType: 'SUBSCRIPTION_RENEWED',
+          type: 'SUBSCRIPTION_RENEWED',
+          entityType: 'SUBSCRIPTION',
+          entityId: dto.businessId,
+          route: '/settings/subscription',
+        },
+      );
+    } catch (_) {}
+
+    return {
+      success: true,
+      message: 'تم تجديد الاشتراك بنجاح',
+      newExpiry: newExpiry.toISOString(),
+      business: updated,
+    };
+  }
+
+  async modifySubscriptionDurationAdmin(
+    adminId: string,
+    dto: {
+      businessId: string;
+      endDate?: string;
+      days?: number;
+    },
+  ) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: dto.businessId },
+    });
+    if (!business) throw new NotFoundException('العمل غير موجود');
+
+    let newExpiry: Date;
+    if (dto.endDate) {
+      newExpiry = new Date(dto.endDate);
+    } else if (dto.days) {
+      newExpiry = new Date();
+      newExpiry.setDate(newExpiry.getDate() + dto.days);
+    } else {
+      throw new BadRequestException('يرجى تحديد تـاريخ الانتهاء أو عدد الأيام');
+    }
+
+    const updated = await this.prisma.business.update({
+      where: { id: dto.businessId },
+      data: {
+        subscriptionExpiry: newExpiry,
+        subscriptionStatus: newExpiry > new Date() ? 'GOLD' : 'EXPIRED',
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'MODIFY_SUBSCRIPTION_DURATION',
+        resource: 'SUBSCRIPTION',
+        resourceId: dto.businessId,
+        details: {
+          newExpiry: newExpiry.toISOString(),
+        },
+      },
+    });
+
+    return { success: true, message: 'تم تعديل مدة الاشتراك بنجاح', updated };
+  }
+
+  async suspendSubscriptionAdmin(
+    adminId: string,
+    businessId: string,
+    reason?: string,
+  ) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+    });
+    if (!business) throw new NotFoundException('العمل غير موجود');
+
+    const updated = await this.prisma.business.update({
+      where: { id: businessId },
+      data: { subscriptionStatus: 'SUSPENDED' },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'SUSPEND_SUBSCRIPTION',
+        resource: 'SUBSCRIPTION',
+        resourceId: businessId,
+        details: { reason },
+      },
+    });
+
+    try {
+      await this.notificationsService.notifyUser(
+        business.userId,
+        'تم إيقاف الاشتراك',
+        'تم إيقاف اشتراكك مؤقتاً من قبل الإدارة. يرجى التواصل مع الدعم.',
+        {
+          notificationType: 'SUBSCRIPTION_SUSPENDED',
+          type: 'SUBSCRIPTION_SUSPENDED',
+          entityType: 'SUBSCRIPTION',
+          entityId: businessId,
+          route: '/subscription-expired',
+        },
+      );
+    } catch (_) {}
+
+    return { success: true, message: 'تم إيقاف الاشتراك بنجاح', updated };
+  }
+
+  async activateSubscriptionAdmin(adminId: string, businessId: string) {
+    const business = await this.prisma.business.findUnique({
+      where: { id: businessId },
+    });
+    if (!business) throw new NotFoundException('العمل غير موجود');
+
+    const now = new Date();
+    let expiry = business.subscriptionExpiry;
+    if (!expiry || expiry <= now) {
+      expiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const updated = await this.prisma.business.update({
+      where: { id: businessId },
+      data: {
+        subscriptionStatus: 'GOLD',
+        subscriptionExpiry: expiry,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'ACTIVATE_SUBSCRIPTION',
+        resource: 'SUBSCRIPTION',
+        resourceId: businessId,
+        details: { expiry: expiry.toISOString() },
+      },
+    });
+
+    try {
+      await this.notificationsService.notifyUser(
+        business.userId,
+        'تم تفعيل الاشتراك',
+        'تم إعادة تفعيل اشتراكك بنجاح.',
+        {
+          notificationType: 'SUBSCRIPTION_ACTIVATED',
+          type: 'SUBSCRIPTION_ACTIVATED',
+          entityType: 'SUBSCRIPTION',
+          entityId: businessId,
+          route: '/settings/subscription',
+        },
+      );
+    } catch (_) {}
+
+    return { success: true, message: 'تم إعادة تفعيل الاشتراك بنجاح', updated };
+  }
+
+  async sendSubscriptionNotificationAdmin(
+    adminId: string,
+    dto: { userId: string; title: string; message: string },
+  ) {
+    await this.notificationsService.notifyUser(
+      dto.userId,
+      dto.title,
+      dto.message,
+      {
+        notificationType: 'CUSTOM_ADMIN_MESSAGE',
+        type: 'CUSTOM_ADMIN_MESSAGE',
+        entityType: 'SUBSCRIPTION',
+        route: '/settings/subscription',
+      },
+    );
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'SEND_SUBSCRIPTION_NOTIFICATION',
+        resource: 'SUBSCRIPTION',
+        resourceId: dto.userId,
+        details: { title: dto.title, message: dto.message },
+      },
+    });
+
+    return { success: true, message: 'تم إرسال الإشعار للمستخدم بنجاح' };
+  }
+
+  async getSubscriptionHistoryAdmin(businessId: string) {
+    const logs = await this.prisma.auditLog.findMany({
+      where: {
+        OR: [
+          { resourceId: businessId },
+          { resource: 'SUBSCRIPTION' },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      actionType: log.action,
+      createdAt: log.createdAt,
+      adminName: log.user?.fullName || 'النظام / الأدمن',
+      details: log.details,
+    }));
+  }
 }
+

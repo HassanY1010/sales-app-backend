@@ -15,6 +15,7 @@ import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
+import { InvoiceNumberService } from '../common/invoice-number.service';
 
 @Injectable()
 export class OrdersService {
@@ -23,6 +24,7 @@ export class OrdersService {
     private readonly financeService: FinanceService,
     private readonly notificationsService: NotificationsService,
     private readonly eventsGateway: EventsGateway,
+    private readonly invoiceNumberService: InvoiceNumberService,
   ) {}
 
   async createOrder(senderId: string, dto: CreateOrderDto, userType: string) {
@@ -30,11 +32,22 @@ export class OrdersService {
       throw new BadRequestException('لا يمكنك إنشاء طلبية لنفسك');
     }
 
+    // ── Idempotency guard: if this clientId was already processed, return the existing order ──
+    if (dto.clientId) {
+      const existing = await this.prisma.order.findUnique({
+        where: { clientId: dto.clientId },
+        include: { items: true, sender: true, receiver: true },
+      });
+      if (existing) {
+        return existing; // Duplicate request — safe to return existing record
+      }
+    }
+
     const connection = await this.prisma.connection.findFirst({
       where: {
         OR: [
-          { requesterId: senderId, receiverId: dto.receiverId },
-          { requesterId: dto.receiverId, receiverId: senderId },
+          { requesterId: senderId, receiverId: dto.receiverId, connectionType: 'SUPPLIER' },
+          { requesterId: dto.receiverId, receiverId: senderId, connectionType: 'CUSTOMER' },
         ],
         status: 'ACCEPTED',
       },
@@ -98,24 +111,35 @@ export class OrdersService {
     if (!isCash && pricesVisible) {
       const currentDebit = new Decimal(connection.account.totalDebit as any);
       const creditLimit = new Decimal(connection.account.creditLimit as any);
-      const newDebt = currentDebit.plus(finalTotal);
-      if (newDebt.greaterThan(creditLimit)) {
-        throw new BadRequestException(
-          `تجاوزت حد سقف المديونية. السقف: ${creditLimit.toFixed(2)}, الرصيد الحالي: ${currentDebit.toFixed(2)}, المطلوب: ${finalTotal.toFixed(2)}`,
-        );
+      const remainingDebt = finalTotal.minus(paidAmount);
+      const newDebt = currentDebit.plus(remainingDebt);
+      
+      if (creditLimit.greaterThan(0) && newDebt.greaterThan(creditLimit)) {
+        const available = creditLimit.minus(currentDebit);
+        if (paidAmount.greaterThan(0)) {
+          throw new BadRequestException(
+            `المبلغ المتبقي (${remainingDebt.toFixed(2)}) يتجاوز الرصيد المتاح ضمن سقف المديونية. المتاح حالياً: ${available.toFixed(2)}.`
+          );
+        } else {
+          throw new BadRequestException(
+            `تم تجاوز سقف المديونية. الرصيد الحالي: ${currentDebit.toFixed(2)}، المبلغ المضاف: ${remainingDebt.toFixed(2)}، الرصيد المتوقع: ${newDebt.toFixed(2)}، سقف المديونية: ${creditLimit.toFixed(2)}.`
+          );
+        }
       }
     }
 
-    const orderNumber = `ORD-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
     const currency = dto.currency || connection.account.currency || 'YER';
     const dueDate = dto.dueDate
       ? new Date(dto.dueDate)
       : connection.account.dueDate;
 
     return this.prisma.$transaction(async (prisma) => {
+      // Generate sequential invoice number atomically inside the transaction
+      const orderNumber = await this.invoiceNumberService.getNextInvoiceNumber(prisma);
       const order = await prisma.order.create({
         data: {
           orderNumber,
+          clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
           senderId,
           receiverId: dto.receiverId,
           status: 'PENDING',
@@ -144,7 +168,8 @@ export class OrdersService {
           orderId: order.id,
           currency,
           dueDate: dueDate ?? undefined,
-          note: `فاتورة نقدية #${orderNumber}`,
+          note: `فاتورة نقدية رقم ${orderNumber}`,
+          connectionId: connection.id,
         });
 
         await this.financeService.recordFinancialMovement(prisma, {
@@ -155,15 +180,23 @@ export class OrdersService {
           orderId: order.id,
           currency,
           dueDate: dueDate ?? undefined,
-          note: `سداد فوري للفاتورة النقدية #${orderNumber}`,
+          note: `سداد فوري للفاتورة النقدية رقم ${orderNumber}`,
+          connectionId: connection.id,
         });
       }
 
       await this.notificationsService.sendPushNotification(
         receiverBusiness.user.id,
         'طلبية جديدة',
-        `لقد استلمت طلبية جديدة من ${senderBusiness.name} برقم #${orderNumber}`,
-        { type: 'NEW_ORDER', orderId: order.id },
+        `لقد استلمت طلبية جديدة من ${senderBusiness.name} برقم ${orderNumber}`,
+        {
+          type: 'NEW_ORDER',
+          notificationType: 'new_order',
+          entityType: 'order',
+          entityId: order.id,
+          orderId: order.id,
+          route: `/receive-orders/incoming?orderId=${order.id}`,
+        },
       );
 
       this.eventsGateway.emitToBusiness(dto.receiverId, 'NEW_ORDER', {
@@ -344,8 +377,8 @@ export class OrdersService {
           throw new ForbiddenException('المستهلك يمكنه فقط قبول أو رفض الفاتورة المستلمة');
         }
       } else {
-        if (dto.status !== 'CANCELLED') {
-          throw new ForbiddenException('المستهلك يمكنه إلغاء طلبياته المرسلة فقط');
+        if (dto.status !== 'CANCELLED' && dto.status !== 'RESUBMITTED') {
+          throw new ForbiddenException('المستهلك يمكنه إلغاء أو إعادة إرساب طلبياته فقط');
         }
       }
     }
@@ -369,84 +402,251 @@ export class OrdersService {
       throw new BadRequestException('يجب اعتماد الأسعار قبل قبول الطلبية');
     }
 
-    if (dto.status === 'ACCEPTED' && !order.isCash) {
-      const updated = await this.prisma.$transaction(async (prisma) => {
-        // --- FIX BUG-02: Advisory Lock to prevent race conditions ---
-        // Locks this specific business pair so concurrent acceptances don't bypass credit limit
+    // --- CASE 1 & 2: ACCEPTING ORDER ---
+    if (dto.status === 'ACCEPTED') {
+      const result = await this.prisma.$transaction(async (prisma) => {
+        // Advisory Lock to prevent race conditions
         await prisma.$executeRaw`
           SELECT pg_advisory_xact_lock(hashtext(${order.senderId || ''} || '-' || ${order.receiverId || ''}))
         `;
 
-        // --- FIX BUG-01: Re-validate credit limit at ACCEPTANCE time ---
-        // Catches the case where pricesVisible=false at creation, prices added later via updateOrderPrices
         const connection = await prisma.connection.findFirst({
           where: {
             OR: [
-              { requesterId: order.senderId, receiverId: order.receiverId },
-              { requesterId: order.receiverId, receiverId: order.senderId },
+              { requesterId: order.senderId, receiverId: order.receiverId, connectionType: 'SUPPLIER' },
+              { requesterId: order.receiverId, receiverId: order.senderId, connectionType: 'CUSTOMER' },
             ],
             status: 'ACCEPTED',
           },
           include: { account: true },
         });
 
-        if (connection?.account) {
-          const currentDebit = new Decimal(
-            connection.account.totalDebit as any,
-          );
-          const creditLimit = new Decimal(
-            connection.account.creditLimit as any,
-          );
+        // Validate credit limit if NOT cash
+        if (!order.isCash && connection?.account) {
+          const currentDebit = new Decimal(connection.account.totalDebit as any);
+          const creditLimit = new Decimal(connection.account.creditLimit as any);
           const orderTotal = new Decimal(order.total as any);
-          const newDebt = currentDebit.plus(orderTotal);
+          const paidAmount = new Decimal((order as any).paidAmount || '0');
+          const remainingDebt = orderTotal.minus(paidAmount);
+          const newDebt = currentDebit.plus(remainingDebt);
 
-          if (newDebt.greaterThan(creditLimit)) {
-            throw new BadRequestException(
-              `لا يمكن قبول الطلبية: تجاوزت حد سقف المديونية. السقف: ${creditLimit.toFixed(2)}, الرصيد الحالي: ${currentDebit.toFixed(2)}, المطلوب: ${orderTotal.toFixed(2)}`,
-            );
+          if (creditLimit.greaterThan(0) && newDebt.greaterThan(creditLimit)) {
+            // Validation failed! Reject order automatically
+            return {
+              isRejected: true,
+              reason: 'Credit Limit Exceeded',
+            };
           }
         }
 
+        // Accept order
         const orderUpdated = await prisma.order.update({
           where: { id: orderId },
           data: {
-            status: dto.status,
+            status: 'ACCEPTED',
             priceAcceptedAt: order.priceAcceptedAt || new Date(),
           },
         });
 
-        await this.financeService.recordFinancialMovement(prisma, {
-          senderId: order.senderId,
-          receiverId: order.receiverId,
-          amount: order.total,
-          type: 'SALE',
-          orderId: order.id,
-          currency: order.currency,
-          dueDate: order.dueDate ?? undefined,
-          note: `فاتورة آجل #${order.orderNumber}`,
+        // Check if invoice already exists
+        const existingInvoice = await prisma.transaction.findFirst({
+          where: { orderId, transactionType: 'SALE' },
         });
 
-        const paidAmount = new Decimal((order as any).paidAmount || '0');
-        if (paidAmount.greaterThan(0)) {
-          await this.financeService.recordFinancialMovement(prisma, {
-            senderId: order.receiverId,
-            receiverId: order.senderId,
-            amount: paidAmount.toString(),
-            type: 'PAYMENT',
+        let invoiceId = existingInvoice?.id;
+        let invoiceNumber = existingInvoice?.voucherNumber;
+
+        if (!existingInvoice) {
+          // Record SALE movement (Invoice)
+          const movement = await this.financeService.recordFinancialMovement(prisma, {
+            senderId: order.senderId,
+            receiverId: order.receiverId,
+            amount: order.total,
+            type: 'SALE',
             orderId: order.id,
             currency: order.currency,
             dueDate: order.dueDate ?? undefined,
-            note: `سداد جزئي للفاتورة الآجلة #${order.orderNumber}`,
+            note: order.isCash ? `فاتورة نقدية #${order.orderNumber}` : `فاتورة آجل #${order.orderNumber}`,
+            connectionId: connection!.id,
+          });
+
+          invoiceId = movement.transaction.id;
+          invoiceNumber = movement.transaction.voucherNumber;
+
+          // Record payment for cash orders or partial paidAmount
+          const paidAmount = order.isCash ? new Decimal(order.total as any) : new Decimal((order as any).paidAmount || '0');
+          if (paidAmount.greaterThan(0)) {
+            await this.financeService.recordFinancialMovement(prisma, {
+              senderId: order.receiverId,
+              receiverId: order.senderId,
+              amount: paidAmount.toString(),
+              type: 'PAYMENT',
+              orderId: order.id,
+              currency: order.currency,
+              dueDate: order.dueDate ?? undefined,
+              note: order.isCash ? `سداد فوري للفاتورة النقدية #${order.orderNumber}` : `سداد جزئي للفاتورة الآجلة #${order.orderNumber}`,
+              connectionId: connection!.id,
+            });
+          }
+        }
+
+        // Link invoiceId to order
+        if (invoiceId) {
+          await prisma.order.update({
+            where: { id: orderId },
+            data: { invoiceId },
           });
         }
 
-        return orderUpdated;
+        return {
+          isRejected: false,
+          order: orderUpdated,
+          invoiceId,
+          invoiceNumber,
+        };
       });
 
-      await this.notifyOrderStatusUpdate(order, dto.status);
+      if (result.isRejected) {
+        // Change status to REJECTED due to credit limit
+        const updated = await this.prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: 'REJECTED',
+            rejectionReason: 'Credit Limit Exceeded',
+            rejectedById: businessId,
+          },
+        });
+
+        await this.notifyOrderStatusUpdate(order, 'REJECTED', 'Credit Limit Exceeded', true);
+
+        await this.prisma.auditLog.create({
+          data: {
+            action: 'UPDATE',
+            resource: 'ORDER',
+            resourceId: orderId,
+            details: {
+              status: 'REJECTED',
+              previousStatus: order.status,
+              rejectionReason: 'Credit Limit Exceeded',
+            },
+          },
+        });
+
+        return updated;
+      } else {
+        // Accepted successfully
+        const targetBusiness = await this.prisma.business.findUnique({
+          where: { id: order.senderId },
+          include: { user: true },
+        });
+
+        if (targetBusiness) {
+          const title = 'تم قبول الطلبية وتحويلها لفاتورة';
+          const body = `تم قبول طلبيتك رقم #${order.orderNumber} وتحويلها لفاتورة مبيعات رقم #${result.invoiceNumber}`;
+          await this.notificationsService.sendPushNotification(
+            targetBusiness.user.id,
+            title,
+            body,
+            {
+              type: 'ORDER_ACCEPTED_CONVERTED',
+              notificationType: 'order_accepted_converted',
+              entityType: 'order',
+              entityId: order.id,
+              orderId: order.id,
+              invoiceId: result.invoiceId,
+              invoiceNumber: result.invoiceNumber,
+              route: `/orders/${result.invoiceId || order.id}`,
+            },
+          );
+
+          this.eventsGateway.emitToBusiness(order.senderId, 'ORDER_STATUS_UPDATE', {
+            orderId: order.id,
+            status: 'ACCEPTED',
+            orderNumber: order.orderNumber,
+            invoiceId: result.invoiceId,
+            invoiceNumber: result.invoiceNumber,
+          });
+        }
+
+        await this.prisma.auditLog.create({
+          data: {
+            action: 'UPDATE',
+            resource: 'ORDER',
+            resourceId: orderId,
+            details: {
+              status: 'ACCEPTED',
+              previousStatus: order.status,
+              invoiceId: result.invoiceId,
+              invoiceNumber: result.invoiceNumber,
+            },
+          },
+        });
+
+        return result.order;
+      }
+    }
+
+    // --- CASE 3: RESUBMITTING ORDER ---
+    if (dto.status === 'RESUBMITTED') {
+      const updated = await this.prisma.order.update({
+        where: { id: orderId },
+        data: {
+          status: 'PENDING',
+          rejectionReason: null,
+          rejectedById: null,
+          invoiceId: null,
+        },
+      });
+
+      const receiverBusiness = await this.prisma.business.findUnique({
+        where: { id: order.receiverId },
+        include: { user: true },
+      });
+
+      const senderBusiness = await this.prisma.business.findUnique({
+        where: { id: order.senderId },
+      });
+
+      if (receiverBusiness && senderBusiness) {
+        await this.notificationsService.sendPushNotification(
+          receiverBusiness.user.id,
+          'إعادة تقديم طلبية شحن',
+          `أعاد العميل ${senderBusiness.name} تقديم طلبيته رقم #${order.orderNumber}`,
+          {
+            type: 'ORDER_RESUBMITTED',
+            notificationType: 'order_resubmitted',
+            entityType: 'order',
+            entityId: order.id,
+            orderId: order.id,
+            route: `/receive-orders/incoming?orderId=${order.id}`,
+          },
+        );
+
+        this.eventsGateway.emitToBusiness(order.receiverId, 'NEW_ORDER', {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          senderName: senderBusiness.name,
+          total: order.total,
+          pricesVisible: order.pricesVisible,
+        });
+      }
+
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'UPDATE',
+          resource: 'ORDER',
+          resourceId: orderId,
+          details: {
+            status: 'RESUBMITTED',
+            previousStatus: order.status,
+          },
+        },
+      });
+
       return updated;
     }
 
+    // --- GENERAL CASE: MANUAL REJECTION, CANCEL, COMPLETED ---
     const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
@@ -479,6 +679,7 @@ export class OrdersService {
     order: any,
     status: string,
     reason?: string,
+    isCreditLimitRejection = false,
   ) {
     if (!order) return;
 
@@ -506,11 +707,29 @@ export class OrdersService {
       body += `\nالسبب: ${reason}`;
     }
 
+    const notificationType = (() => {
+      if (isCreditLimitRejection) return 'order_rejected_credit_limit';
+      if (status === 'REJECTED') return 'order_rejected';
+      if (status === 'PRICES_ACCEPTED') return 'order_prices_accepted';
+      return 'order_status_update';
+    })();
+
     await this.notificationsService.sendPushNotification(
       targetBusiness.user.id,
       title,
       body,
-      { type: 'ORDER_STATUS_UPDATE', orderId: order.id, status },
+      {
+        type: notificationType.toUpperCase(),
+        notificationType,
+        entityType: 'order',
+        entityId: order.id,
+        orderId: order.id,
+        status,
+        rejectionReason: reason,
+        route: notificationType === 'order_rejected' || notificationType === 'order_rejected_credit_limit'
+          ? `/purchase-orders/received-list?orderId=${order.id}`
+          : `/orders/${order.id}`,
+      },
     );
 
     this.eventsGateway.emitToBusiness(order.senderId, 'ORDER_STATUS_UPDATE', {
