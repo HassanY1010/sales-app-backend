@@ -295,19 +295,13 @@ export class ConnectionsService {
                   creditLimit,
                   billingCycle,
                   dueDate,
-                  ...(openingBalance !== 0 && {
-                    balance: dbOpeningBalance,
-                    totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
-                    totalDebit:
-                      dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
-                  }),
                 },
               }
             : {
                 create: {
-                  balance: dbOpeningBalance,
-                  totalCredit: dbOpeningBalance > 0 ? dbOpeningBalance : 0,
-                  totalDebit: dbOpeningBalance < 0 ? Math.abs(dbOpeningBalance) : 0,
+                  balance: 0,
+                  totalCredit: 0,
+                  totalDebit: 0,
                   creditLimit,
                   billingCycle,
                   dueDate,
@@ -330,20 +324,15 @@ export class ConnectionsService {
         },
       });
 
-      // If there's an opening balance, create an ADJUSTMENT transaction to document it
-      if (openingBalance !== 0) {
-        const senderId = dbOpeningBalance > 0 ? connection.requesterId : connection.receiverId;
-        const receiverId = dbOpeningBalance > 0 ? connection.receiverId : connection.requesterId;
-        const amount = Math.abs(dbOpeningBalance);
-
-        await prisma.transaction.create({
-          data: {
-            transactionType: 'ADJUSTMENT',
-            amount,
-            senderId,
-            receiverId,
-            note: `رصيد افتتاحي: ${openingBalance}`,
-          },
+      // If there's an opening balance and no previous account balance, record the opening balance ONCE via FinanceService
+      if (openingBalance !== 0 && (!existingAccount || new Decimal(existingAccount.balance as any || 0).isZero())) {
+        await this.financeService.recordFinancialMovement(prisma, {
+          senderId: connection.requesterId,
+          receiverId: connection.receiverId,
+          amount: Math.abs(openingBalance),
+          type: 'ADJUSTMENT',
+          note: `رصيد افتتاحي: ${openingBalance}`,
+          connectionId: connection.id,
         });
 
         // Log the opening balance in audit
@@ -502,6 +491,8 @@ export class ConnectionsService {
             { receiver: { name: { contains: search, mode: 'insensitive' } } },
             { requester: { phoneNumber: { contains: search } } },
             { receiver: { phoneNumber: { contains: search } } },
+            { requester: { user: { phone: { contains: search } } } },
+            { receiver: { user: { phone: { contains: search } } } },
             { requester: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
             { receiver: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
           ],
@@ -1457,6 +1448,108 @@ export class ConnectionsService {
     });
 
     return filtered.map(c => this.normalizeConnection(c, businessId));
+  }
+
+  /**
+   * Single Source of Truth: Resolves and validates an accepted connection between myBusinessId and targetIdentifier.
+   * targetIdentifier can be a Connection.id, Business.id, User.id, CustomerSupplierLink.id, or Customer/Supplier ID.
+   */
+  async resolveAcceptedConnection(myBusinessId: string, targetIdentifier: string, expectedRole?: 'CUSTOMER' | 'SUPPLIER') {
+    if (!myBusinessId || !targetIdentifier) return null;
+
+    // 1. Direct search by Connection ID
+    let connection = await this.prisma.connection.findFirst({
+      where: {
+        id: targetIdentifier,
+        status: 'ACCEPTED',
+        OR: [{ requesterId: myBusinessId }, { receiverId: myBusinessId }],
+      },
+      include: { account: true, requester: { include: { user: true } }, receiver: { include: { user: true } } },
+    });
+
+    if (connection) return connection;
+
+    // 2. Search by Business ID
+    connection = await this.prisma.connection.findFirst({
+      where: {
+        status: 'ACCEPTED',
+        OR: [
+          { requesterId: myBusinessId, receiverId: targetIdentifier },
+          { requesterId: targetIdentifier, receiverId: myBusinessId },
+        ],
+        ...(expectedRole ? {
+          OR: [
+            { requesterId: myBusinessId, connectionType: expectedRole },
+            { receiverId: myBusinessId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+          ]
+        } : {}),
+      },
+      include: { account: true, requester: { include: { user: true } }, receiver: { include: { user: true } } },
+    });
+
+    if (connection) return connection;
+
+    // 3. Search by User ID
+    const targetBusiness = await this.prisma.business.findFirst({
+      where: { OR: [{ id: targetIdentifier }, { userId: targetIdentifier }] },
+      select: { id: true },
+    });
+
+    if (targetBusiness?.id) {
+      connection = await this.prisma.connection.findFirst({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterId: myBusinessId, receiverId: targetBusiness.id },
+            { requesterId: targetBusiness.id, receiverId: myBusinessId },
+          ],
+          ...(expectedRole ? {
+            OR: [
+              { requesterId: myBusinessId, connectionType: expectedRole },
+              { receiverId: myBusinessId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+            ]
+          } : {}),
+        },
+        include: { account: true, requester: { include: { user: true } }, receiver: { include: { user: true } } },
+      });
+
+      if (connection) return connection;
+    }
+
+    // 4. Search by CustomerSupplierLink ID or linked dual account
+    const link = await this.prisma.customerSupplierLink.findFirst({
+      where: {
+        OR: [{ id: targetIdentifier }, { customerId: targetIdentifier }, { supplierId: targetIdentifier }],
+        status: 'ACTIVE',
+      },
+      include: {
+        customer: { include: { account: true, requester: { include: { user: true } }, receiver: { include: { user: true } } } },
+        supplier: { include: { account: true, requester: { include: { user: true } }, receiver: { include: { user: true } } } },
+      },
+    });
+
+    if (link) {
+      if (expectedRole === 'CUSTOMER' && link.customer.status === 'ACCEPTED') {
+        return link.customer;
+      }
+      if (expectedRole === 'SUPPLIER' && link.supplier.status === 'ACCEPTED') {
+        return link.supplier;
+      }
+      if (
+        (link.customer.requesterId === myBusinessId || link.customer.receiverId === myBusinessId) &&
+        link.customer.status === 'ACCEPTED'
+      ) {
+        return link.customer;
+      }
+      if (
+        (link.supplier.requesterId === myBusinessId || link.supplier.receiverId === myBusinessId) &&
+        link.supplier.status === 'ACCEPTED'
+      ) {
+        return link.supplier;
+      }
+    }
+
+    return null;
   }
 }
 

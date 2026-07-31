@@ -43,10 +43,11 @@ export class FinanceService {
       attachmentUrl?: string;
       userId?: string; // For audit logging
       connectionId?: string;
+      accountRole?: 'CUSTOMER' | 'SUPPLIER';
       clientId?: string; // Device-generated UUID for idempotency
     },
   ) {
-    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId } =
+    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId, accountRole } =
       params;
     const decimalAmount = new Decimal(amount.toString());
 
@@ -54,27 +55,85 @@ export class FinanceService {
       throw new BadRequestException('Cannot transact within the same business');
     }
 
-    // 1. Find the connection and account - USE RAW QUERY FOR ROW-LEVEL LOCKING
-    // Prisma's findUnique doesn't support 'FOR UPDATE' easily across all versions,
-    // so we use a raw query or ensure the transaction isolation level handles it.
-    // However, in $transaction, subsequent updates to the same row are naturally queued.
-    // To be 100% safe against stale reads in the same transaction, we fetch the account.
+    const expectedRole = accountRole || (type === 'SALE' ? 'CUSTOMER' : type === 'PURCHASE' ? 'SUPPLIER' : undefined);
 
-    const connection = connectionId
+    let connection = connectionId
       ? await tx.connection.findFirst({
           where: { id: connectionId, status: 'ACCEPTED' },
           include: { account: true },
         })
-      : await tx.connection.findFirst({
+      : null;
+
+    if (!connection) {
+      // 1. Check direct connection by business IDs
+      connection = await tx.connection.findFirst({
+        where: {
+          OR: [
+            { requesterId: senderId, receiverId: receiverId },
+            { requesterId: receiverId, receiverId: senderId },
+          ],
+          status: 'ACCEPTED',
+          ...(expectedRole ? {
+            OR: [
+              { requesterId: senderId, connectionType: expectedRole },
+              { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+            ]
+          } : {}),
+        },
+        include: { account: true },
+      });
+    }
+
+    if (!connection) {
+      // 2. Check if receiverId is user.id
+      const receiverBiz = await tx.business.findFirst({
+        where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+        select: { id: true },
+      });
+      if (receiverBiz?.id) {
+        connection = await tx.connection.findFirst({
           where: {
             OR: [
-              { requesterId: senderId, receiverId: receiverId },
-              { requesterId: receiverId, receiverId: senderId },
+              { requesterId: senderId, receiverId: receiverBiz.id },
+              { requesterId: receiverBiz.id, receiverId: senderId },
             ],
             status: 'ACCEPTED',
+            ...(expectedRole ? {
+              OR: [
+                { requesterId: senderId, connectionType: expectedRole },
+                { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+              ]
+            } : {}),
           },
           include: { account: true },
         });
+      }
+    }
+
+    if (!connection) {
+      // 3. Check if receiverId is a CustomerSupplierLink
+      const link = await tx.customerSupplierLink.findFirst({
+        where: {
+          OR: [{ id: receiverId }, { customerId: receiverId }, { supplierId: receiverId }],
+          status: 'ACTIVE',
+        },
+        include: {
+          customer: { include: { account: true } },
+          supplier: { include: { account: true } },
+        },
+      });
+      if (link) {
+        if (expectedRole === 'CUSTOMER') {
+          connection = link.customer;
+        } else if (expectedRole === 'SUPPLIER') {
+          connection = link.supplier;
+        } else if (link.customer.requesterId === senderId || link.customer.receiverId === senderId) {
+          connection = link.customer;
+        } else if (link.supplier.requesterId === senderId || link.supplier.receiverId === senderId) {
+          connection = link.supplier;
+        }
+      }
+    }
 
     if (!connection || !connection.account) {
       throw new BadRequestException(

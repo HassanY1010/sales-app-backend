@@ -3,6 +3,7 @@ import {
   Get,
   Patch,
   Post,
+  Delete,
   Body,
   Param,
   UseGuards,
@@ -44,12 +45,28 @@ export class NotificationsController {
     return this.notificationsService.getUnreadCount(user.userId);
   }
 
+  @Get('unread-count')
+  async getUnreadCountAlias(@CurrentUser() user: any) {
+    return this.notificationsService.getUnreadCount(user.userId);
+  }
+
   @Patch(':id/read')
   async markAsRead(
     @CurrentUser() user: any,
     @Param('id') notificationId: string,
   ) {
     return this.notificationsService.markAsRead(user.userId, notificationId);
+  }
+
+  @Delete(':id')
+  async deleteNotification(
+    @CurrentUser() user: any,
+    @Param('id') notificationId: string,
+  ) {
+    return this.notificationsService.deleteNotification(
+      user.userId,
+      notificationId,
+    );
   }
 
   @Post('mark-read')
@@ -81,14 +98,9 @@ export class NotificationsController {
           where: {
             status: 'ACCEPTED',
             OR: [
-              {
-                requesterId: user.businessId,
-                receiverId: body.targetBusinessId,
-              },
-              {
-                requesterId: body.targetBusinessId,
-                receiverId: user.businessId,
-              },
+              { requesterId: user.businessId, receiverId: body.targetBusinessId },
+              { requesterId: body.targetBusinessId, receiverId: user.businessId },
+              { id: body.targetBusinessId, OR: [{ requesterId: user.businessId }, { receiverId: user.businessId }] },
             ],
           },
           select: { id: true },

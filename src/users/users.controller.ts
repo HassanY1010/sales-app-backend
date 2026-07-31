@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   Patch,
   Post,
   UploadedFile,
@@ -23,8 +24,13 @@ import { CurrentUser } from '../core/decorators/current-user.decorator';
 const logoUploadDir = join(process.cwd(), 'uploads', 'logos');
 const allowedLogoMimeTypes = new Map<string, string>([
   ['image/jpeg', '.jpg'],
+  ['image/jpg', '.jpg'],
+  ['image/pjpeg', '.jpg'],
   ['image/png', '.png'],
   ['image/webp', '.webp'],
+  ['image/heic', '.heic'],
+  ['image/heif', '.heif'],
+  ['application/octet-stream', '.jpg'],
 ]);
 
 function ensureLogoUploadDir() {
@@ -36,6 +42,8 @@ function ensureLogoUploadDir() {
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
@@ -80,10 +88,13 @@ export class UsersController {
         file: any,
         callback: (error: Error | null, acceptFile: boolean) => void,
       ) => {
-        if (!allowedLogoMimeTypes.has(file.mimetype)) {
+        const isAllowed = allowedLogoMimeTypes.has(file.mimetype) ||
+          /\.(jpg|jpeg|png|webp|heic|heif)$/i.test(file.originalname || '');
+
+        if (!isAllowed) {
           return callback(
             new BadRequestException(
-              'Only JPG, PNG, and WEBP logo images are allowed',
+              `Invalid file type (${file.mimetype}). Only JPG, PNG, and WEBP images are allowed.`,
             ),
             false,
           );
@@ -91,12 +102,13 @@ export class UsersController {
         callback(null, true);
       },
       limits: {
-        fileSize: 2 * 1024 * 1024,
+        fileSize: 10 * 1024 * 1024, // 10 MB limit
         files: 1,
       },
     }),
   )
   async uploadLogo(@CurrentUser() user: any, @UploadedFile() file: any) {
+    this.logger.log(`📸 Received uploadLogo request from userId: ${user.userId}`);
     return this.saveLogoFile(user.userId, file, 'logo');
   }
 
@@ -108,10 +120,13 @@ export class UsersController {
         file: any,
         callback: (error: Error | null, acceptFile: boolean) => void,
       ) => {
-        if (!allowedLogoMimeTypes.has(file.mimetype)) {
+        const isAllowed = allowedLogoMimeTypes.has(file.mimetype) ||
+          /\.(jpg|jpeg|png|webp|heic|heif)$/i.test(file.originalname || '');
+
+        if (!isAllowed) {
           return callback(
             new BadRequestException(
-              'Only JPG, PNG, and WEBP logo images are allowed',
+              `Invalid file type (${file.mimetype}). Only JPG, PNG, and WEBP images are allowed.`,
             ),
             false,
           );
@@ -119,26 +134,34 @@ export class UsersController {
         callback(null, true);
       },
       limits: {
-        fileSize: 2 * 1024 * 1024,
+        fileSize: 10 * 1024 * 1024, // 10 MB limit
         files: 1,
       },
     }),
   )
   async uploadAvatar(@CurrentUser() user: any, @UploadedFile() file: any) {
+    this.logger.log(`📸 Received uploadAvatar request from userId: ${user.userId}`);
     return this.saveLogoFile(user.userId, file, 'avatar');
   }
 
   private async saveLogoFile(userId: string, file: any, type: 'logo' | 'avatar') {
     if (!file?.buffer || !file?.mimetype) {
-      throw new BadRequestException('Logo file is required');
+      this.logger.error(`❌ saveLogoFile failed: No file buffer or mimetype received for userId: ${userId}`);
+      throw new BadRequestException('Image file is required');
     }
 
-    const extension = allowedLogoMimeTypes.get(file.mimetype);
-    if (!extension) {
-      throw new BadRequestException(
-        'Only JPG, PNG, and WEBP logo images are allowed',
-      );
+    this.logger.log(
+      `📥 Processing file upload [${type}]: name=${file.originalname}, size=${file.size} bytes, mimetype=${file.mimetype}`,
+    );
+
+    let extension = allowedLogoMimeTypes.get(file.mimetype);
+    if (!extension && file.originalname) {
+      const match = file.originalname.match(/\.(jpg|jpeg|png|webp|heic|heif)$/i);
+      if (match) {
+        extension = `.${match[1].toLowerCase()}`;
+      }
     }
+    extension = extension || '.jpg';
 
     const filename = `${randomUUID()}${extension}`;
     const projectId = process.env.SUPABASE_PROJECT_ID;
@@ -149,6 +172,7 @@ export class UsersController {
 
     if (projectId && serviceKey) {
       try {
+        this.logger.log(`☁️ Uploading to Supabase bucket '${bucket}' as ${filename}...`);
         const uploadUrl = `https://${projectId}.supabase.co/storage/v1/object/${bucket}/${filename}`;
         const response = await fetch(uploadUrl, {
           method: 'POST',
@@ -161,23 +185,32 @@ export class UsersController {
 
         if (!response.ok) {
           const errText = await response.text();
+          this.logger.error(`❌ Supabase upload error: ${response.statusText} - ${errText}`);
           throw new Error(`Supabase upload failed: ${response.statusText} - ${errText}`);
         }
 
         fileUrl = `https://${projectId}.supabase.co/storage/v1/object/public/${bucket}/${filename}`;
+        this.logger.log(`✅ Supabase upload success: ${fileUrl}`);
       } catch (error: any) {
+        this.logger.error(`❌ Storage upload failed: ${error.message}`);
         throw new BadRequestException(`Failed to upload file to storage: ${error.message}`);
       }
     } else {
       ensureLogoUploadDir();
-      await writeFile(join(logoUploadDir, filename), file.buffer);
+      const localPath = join(logoUploadDir, filename);
+      await writeFile(localPath, file.buffer);
       fileUrl = `/uploads/logos/${filename}`;
+      this.logger.log(`📁 Local storage upload success: saved to ${localPath}, url=${fileUrl}`);
     }
 
     if (type === 'logo') {
-      return this.usersService.updateBusinessLogo(userId, fileUrl);
+      const result = await this.usersService.updateBusinessLogo(userId, fileUrl);
+      this.logger.log(`✅ Updated Business Logo in DB for userId: ${userId} -> ${fileUrl}`);
+      return result;
     } else {
-      return this.usersService.updateUserAvatar(userId, fileUrl);
+      const result = await this.usersService.updateUserAvatar(userId, fileUrl);
+      this.logger.log(`✅ Updated User Avatar in DB for userId: ${userId} -> ${fileUrl}`);
+      return result;
     }
   }
 }

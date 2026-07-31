@@ -43,16 +43,12 @@ export class OrdersService {
       }
     }
 
-    const connection = await this.prisma.connection.findFirst({
-      where: {
-        OR: [
-          { requesterId: senderId, receiverId: dto.receiverId, connectionType: 'SUPPLIER' },
-          { requesterId: dto.receiverId, receiverId: senderId, connectionType: 'CUSTOMER' },
-        ],
-        status: 'ACCEPTED',
-      },
-      include: { account: true },
-    });
+    const expectedRole = (userType === 'individual' || (dto as any).connectionType === 'SUPPLIER') ? 'SUPPLIER' : 'CUSTOMER';
+    const connection = await this.resolveAcceptedConnection(
+      senderId,
+      dto.receiverId,
+      expectedRole,
+    );
 
     if (!connection?.account) {
       throw new BadRequestException(
@@ -136,13 +132,14 @@ export class OrdersService {
     return this.prisma.$transaction(async (prisma) => {
       // Generate sequential invoice number atomically inside the transaction
       const orderNumber = await this.invoiceNumberService.getNextInvoiceNumber(prisma);
+      const initialStatus = 'ISSUED';
       const order = await prisma.order.create({
         data: {
           orderNumber,
           clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
           senderId,
           receiverId: dto.receiverId,
-          status: 'PENDING',
+          status: initialStatus,
           isCash,
           currency,
           dueDate: dueDate ?? undefined,
@@ -159,7 +156,9 @@ export class OrdersService {
         include: { items: true, sender: true, receiver: true },
       });
 
-      if (isCash && pricesVisible) {
+      // ── Immediate Financial Movement for ALL Invoices (Cash & Deferred) ──
+      if (pricesVisible) {
+        // 1. Record the SALE movement (Debits receiver's account / increases debt for customer, records sale for supplier)
         await this.financeService.recordFinancialMovement(prisma, {
           senderId,
           receiverId: dto.receiverId,
@@ -168,27 +167,34 @@ export class OrdersService {
           orderId: order.id,
           currency,
           dueDate: dueDate ?? undefined,
-          note: `فاتورة نقدية رقم ${orderNumber}`,
+          note: isCash
+            ? `فاتورة مبيعات نقدية رقم ${orderNumber}`
+            : `فاتورة مبيعات آجلة رقم ${orderNumber}`,
           connectionId: connection.id,
         });
 
-        await this.financeService.recordFinancialMovement(prisma, {
-          senderId: dto.receiverId,
-          receiverId: senderId,
-          amount: finalTotal.toString(),
-          type: 'PAYMENT',
-          orderId: order.id,
-          currency,
-          dueDate: dueDate ?? undefined,
-          note: `سداد فوري للفاتورة النقدية رقم ${orderNumber}`,
-          connectionId: connection.id,
-        });
+        // 2. If there is a paid amount (cash or down payment), record PAYMENT movement immediately
+        if (paidAmount.greaterThan(0)) {
+          await this.financeService.recordFinancialMovement(prisma, {
+            senderId: dto.receiverId,
+            receiverId: senderId,
+            amount: paidAmount.toString(),
+            type: 'PAYMENT',
+            orderId: order.id,
+            currency,
+            dueDate: dueDate ?? undefined,
+            note: isCash
+              ? `سداد فوري للفاتورة النقدية رقم ${orderNumber}`
+              : `دفعة مقدية للفاتورة رقم ${orderNumber}`,
+            connectionId: connection.id,
+          });
+        }
       }
 
       await this.notificationsService.sendPushNotification(
         receiverBusiness.user.id,
-        'طلبية جديدة',
-        `لقد استلمت طلبية جديدة من ${senderBusiness.name} برقم ${orderNumber}`,
+        'فاتورة جديدة',
+        `وصلت إليك فاتورة رقم (${orderNumber}) من ${senderBusiness.name}`,
         {
           type: 'NEW_ORDER',
           notificationType: 'new_order',
@@ -325,7 +331,13 @@ export class OrdersService {
         });
       }
 
+      const oldTotal = new Decimal(order.total as any || '0');
+      const newTotal = subtotal.plus(tax).minus(discount);
+      const totalDiff = newTotal.minus(oldTotal);
+
+      const oldPaid = new Decimal(order.paidAmount as any || '0');
       const paidAmount = new Decimal(dto.paidAmount || order.paidAmount as any || '0');
+      const paidDiff = paidAmount.minus(oldPaid);
 
       await prisma.order.update({
         where: { id: orderId },
@@ -334,19 +346,50 @@ export class OrdersService {
           tax: tax.toString(),
           discount: discount.toString(),
           paidAmount: paidAmount.toString(),
-          total: subtotal.plus(tax).minus(discount).toString(),
+          total: newTotal.toString(),
           currency: dto.currency || order.currency,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : order.dueDate,
           pricesVisible: true,
           priceAcceptedAt: new Date(),
         },
       });
+
+      // ── Instant Financial Movement Recalculation on Edit ──
+      const connection = await this.resolveAcceptedConnection(order.senderId, order.receiverId);
+      if (connection) {
+        if (!totalDiff.isZero()) {
+          await this.financeService.recordFinancialMovement(prisma, {
+            senderId: order.senderId,
+            receiverId: order.receiverId,
+            amount: totalDiff.abs().toString(),
+            type: totalDiff.greaterThan(0) ? 'SALE' : 'ADJUSTMENT',
+            orderId,
+            note: `تعديل قيمة الفاتورة رقم ${order.orderNumber}`,
+            connectionId: connection.id,
+          });
+        }
+
+        if (!paidDiff.isZero()) {
+          await this.financeService.recordFinancialMovement(prisma, {
+            senderId: paidDiff.greaterThan(0) ? order.receiverId : order.senderId,
+            receiverId: paidDiff.greaterThan(0) ? order.senderId : order.receiverId,
+            amount: paidDiff.abs().toString(),
+            type: 'PAYMENT',
+            orderId,
+            note: `تعديل السداد للفاتورة رقم ${order.orderNumber}`,
+            connectionId: connection.id,
+          });
+        }
+      }
     });
 
     const updated = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { items: true, sender: true, receiver: true },
     });
+
+    this.eventsGateway.emitToBusiness(order.senderId, 'ACCOUNT_UPDATED', { orderId });
+    this.eventsGateway.emitToBusiness(order.receiverId, 'ACCOUNT_UPDATED', { orderId });
 
     await this.notifyOrderStatusUpdate(updated, 'PRICES_ACCEPTED');
     return updated;
@@ -763,5 +806,92 @@ export class OrdersService {
           total: '0',
         })) ?? [],
     };
+  }
+
+  private async resolveAcceptedConnection(senderId: string, receiverId: string, expectedRole?: 'CUSTOMER' | 'SUPPLIER') {
+    if (!senderId || !receiverId) return null;
+
+    // 1. Check direct connection by ID or business IDs
+    let connection = await this.prisma.connection.findFirst({
+      where: {
+        status: 'ACCEPTED',
+        OR: [
+          { id: receiverId, OR: [{ requesterId: senderId }, { receiverId: senderId }] },
+          { requesterId: senderId, receiverId: receiverId },
+          { requesterId: receiverId, receiverId: senderId },
+        ],
+        ...(expectedRole ? {
+          OR: [
+            { requesterId: senderId, connectionType: expectedRole },
+            { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+          ]
+        } : {}),
+      },
+      include: { account: true },
+    });
+
+    if (connection) return connection;
+
+    // 2. Check if receiverId is user.id
+    const receiverBiz = await this.prisma.business.findFirst({
+      where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+      select: { id: true },
+    });
+
+    if (receiverBiz?.id) {
+      connection = await this.prisma.connection.findFirst({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterId: senderId, receiverId: receiverBiz.id },
+            { requesterId: receiverBiz.id, receiverId: senderId },
+          ],
+          ...(expectedRole ? {
+            OR: [
+              { requesterId: senderId, connectionType: expectedRole },
+              { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+            ]
+          } : {}),
+        },
+        include: { account: true },
+      });
+
+      if (connection) return connection;
+    }
+
+    // 3. Check if receiverId is a CustomerSupplierLink or linked dual connection
+    const link = await this.prisma.customerSupplierLink.findFirst({
+      where: {
+        OR: [{ id: receiverId }, { customerId: receiverId }, { supplierId: receiverId }],
+        status: 'ACTIVE',
+      },
+      include: {
+        customer: { include: { account: true } },
+        supplier: { include: { account: true } },
+      },
+    });
+
+    if (link) {
+      if (expectedRole === 'CUSTOMER' && link.customer.status === 'ACCEPTED') {
+        return link.customer;
+      }
+      if (expectedRole === 'SUPPLIER' && link.supplier.status === 'ACCEPTED') {
+        return link.supplier;
+      }
+      if (
+        (link.customer.requesterId === senderId || link.customer.receiverId === senderId) &&
+        link.customer.status === 'ACCEPTED'
+      ) {
+        return link.customer;
+      }
+      if (
+        (link.supplier.requesterId === senderId || link.supplier.receiverId === senderId) &&
+        link.supplier.status === 'ACCEPTED'
+      ) {
+        return link.supplier;
+      }
+    }
+
+    return null;
   }
 }

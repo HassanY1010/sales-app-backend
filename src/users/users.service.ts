@@ -136,6 +136,7 @@ export class UsersService {
     });
 
     if (!user?.business?.id) {
+      this.logger.error(`❌ updateBusinessLogo: Business profile not found for userId ${userId}`);
       throw new NotFoundException('Business profile not found');
     }
 
@@ -154,6 +155,7 @@ export class UsersService {
       data: { avatarUrl: logoUrl },
     });
 
+    this.logger.log(`💾 Prisma DB: Successfully updated Business ${business.id} logoUrl & User ${userId} avatarUrl to: ${logoUrl}`);
     return { url: business.logoUrl };
   }
 
@@ -167,6 +169,7 @@ export class UsersService {
       },
     });
 
+    this.logger.log(`💾 Prisma DB: Successfully updated User ${user.id} avatarUrl to: ${avatarUrl}`);
     return { url: user.avatarUrl };
   }
 }
