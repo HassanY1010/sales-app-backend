@@ -132,6 +132,12 @@ export class BackupService implements OnModuleInit {
 
     return this.prisma.$transaction(async (tx) => {
       const data = backupData.data || {};
+      const oldBusinessId = backupData.businessId || data.business?.id;
+
+      this.logger.log(
+        `Restoring backup payload. currentBusinessId=${businessId}, oldBusinessId=${oldBusinessId}`,
+      );
+
       const stats = {
         business: 0,
         connections: 0,
@@ -142,7 +148,7 @@ export class BackupService implements OnModuleInit {
         notifications: 0,
       };
 
-      if (data.business?.id === businessId) {
+      if (data.business) {
         await tx.business.update({
           where: { id: businessId },
           data: this.pick(data.business, [
@@ -157,15 +163,39 @@ export class BackupService implements OnModuleInit {
         stats.business = 1;
       }
 
-      for (const connection of data.connections || []) {
-        if (
-          connection.requesterId !== businessId &&
-          connection.receiverId !== businessId
-        )
-          continue;
+      // 1. Process connections (including customers & suppliers)
+      const rawConnections = [
+        ...(data.connections || []),
+        ...(data.customers || []),
+        ...(data.suppliers || []),
+      ];
+
+      const processedConnIds = new Set<string>();
+
+      for (const rawConn of rawConnections) {
+        if (!rawConn || !rawConn.id) continue;
+        if (processedConnIds.has(rawConn.id)) continue;
+        processedConnIds.add(rawConn.id);
+
+        let reqId = rawConn.requesterId;
+        let recId = rawConn.receiverId;
+
+        if (oldBusinessId && reqId === oldBusinessId) reqId = businessId;
+        if (oldBusinessId && recId === oldBusinessId) recId = businessId;
+
+        if (reqId !== businessId && recId !== businessId) {
+          reqId = businessId;
+        }
+
+        const connPayload = {
+          ...rawConn,
+          requesterId: reqId,
+          receiverId: recId,
+        };
+
         await tx.connection.upsert({
-          where: { id: connection.id },
-          create: this.pick(connection, [
+          where: { id: connPayload.id },
+          create: this.pick(connPayload, [
             'id',
             'requesterId',
             'receiverId',
@@ -178,7 +208,7 @@ export class BackupService implements OnModuleInit {
             'createdAt',
             'updatedAt',
           ]) as any,
-          update: this.pick(connection, [
+          update: this.pick(connPayload, [
             'status',
             'connectionType',
             'showPrices',
@@ -201,8 +231,11 @@ export class BackupService implements OnModuleInit {
         ).map((connection) => connection.id),
       );
 
+      // 2. Process accounts
       for (const account of data.accounts || []) {
+        if (!account || !account.connectionId) continue;
         if (!validConnectionIds.has(account.connectionId)) continue;
+
         await tx.account.upsert({
           where: { connectionId: account.connectionId },
           create: this.pick(account, [
@@ -229,13 +262,35 @@ export class BackupService implements OnModuleInit {
         stats.accounts++;
       }
 
-      for (const order of data.orders || []) {
-        if (order.senderId !== businessId && order.receiverId !== businessId)
-          continue;
-        await tx.orderItem.deleteMany({ where: { orderId: order.id } });
+      // 3. Process orders & invoices
+      const rawOrders = [...(data.orders || []), ...(data.invoices || [])];
+      const processedOrderIds = new Set<string>();
+
+      for (const rawOrder of rawOrders) {
+        if (!rawOrder || !rawOrder.id) continue;
+        if (processedOrderIds.has(rawOrder.id)) continue;
+        processedOrderIds.add(rawOrder.id);
+
+        let senderId = rawOrder.senderId;
+        let receiverId = rawOrder.receiverId;
+
+        if (oldBusinessId && senderId === oldBusinessId) senderId = businessId;
+        if (oldBusinessId && receiverId === oldBusinessId) receiverId = businessId;
+
+        if (senderId !== businessId && receiverId !== businessId) {
+          senderId = businessId;
+        }
+
+        const orderPayload = {
+          ...rawOrder,
+          senderId,
+          receiverId,
+        };
+
+        await tx.orderItem.deleteMany({ where: { orderId: orderPayload.id } });
         await tx.order.upsert({
-          where: { id: order.id },
-          create: this.pick(order, [
+          where: { id: orderPayload.id },
+          create: this.pick(orderPayload, [
             'id',
             'orderNumber',
             'senderId',
@@ -256,7 +311,7 @@ export class BackupService implements OnModuleInit {
             'createdAt',
             'updatedAt',
           ]) as any,
-          update: this.pick(order, [
+          update: this.pick(orderPayload, [
             'status',
             'isCash',
             'currency',
@@ -274,7 +329,8 @@ export class BackupService implements OnModuleInit {
         });
         stats.orders++;
 
-        for (const item of order.items || []) {
+        for (const item of rawOrder.items || []) {
+          if (!item) continue;
           await tx.orderItem.create({
             data: this.pick(item, [
               'id',
@@ -291,15 +347,34 @@ export class BackupService implements OnModuleInit {
         }
       }
 
-      for (const transaction of data.transactions || []) {
-        if (
-          transaction.senderId !== businessId &&
-          transaction.receiverId !== businessId
-        )
-          continue;
+      // 4. Process transactions & receipts
+      const rawTxns = [...(data.transactions || []), ...(data.receipts || [])];
+      const processedTxnIds = new Set<string>();
+
+      for (const rawTxn of rawTxns) {
+        if (!rawTxn || !rawTxn.id) continue;
+        if (processedTxnIds.has(rawTxn.id)) continue;
+        processedTxnIds.add(rawTxn.id);
+
+        let senderId = rawTxn.senderId;
+        let receiverId = rawTxn.receiverId;
+
+        if (oldBusinessId && senderId === oldBusinessId) senderId = businessId;
+        if (oldBusinessId && receiverId === oldBusinessId) receiverId = businessId;
+
+        if (senderId !== businessId && receiverId !== businessId) {
+          senderId = businessId;
+        }
+
+        const txnPayload = {
+          ...rawTxn,
+          senderId,
+          receiverId,
+        };
+
         await tx.transaction.upsert({
-          where: { id: transaction.id },
-          create: this.pick(transaction, [
+          where: { id: txnPayload.id },
+          create: this.pick(txnPayload, [
             'id',
             'transactionType',
             'voucherNumber',
@@ -314,7 +389,7 @@ export class BackupService implements OnModuleInit {
             'note',
             'createdAt',
           ]) as any,
-          update: this.pick(transaction, [
+          update: this.pick(txnPayload, [
             'transactionType',
             'voucherNumber',
             'amount',
@@ -329,6 +404,7 @@ export class BackupService implements OnModuleInit {
         stats.transactions++;
       }
 
+      // 5. Notifications
       const userIds = (
         await tx.user.findMany({
           where: { business: { id: businessId } },
