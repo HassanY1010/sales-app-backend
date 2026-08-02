@@ -16,6 +16,7 @@ import {
 } from './dto/create-connection.dto';
 import { ManualAddConnectionDto } from './dto/manual-add-connection.dto';
 import { LinkConnectionsDto } from './dto/link-connections.dto';
+import { SendRelationshipRequestDto } from './dto/send-relationship-request.dto';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
@@ -219,6 +220,27 @@ export class ConnectionsController {
     return this.connectionsService.unblockConnection(
       user.businessId,
       connectionId,
+    );
+  }
+
+  /**
+   * New unified endpoint: send a relationship request by phone number.
+   * Handles both registered and unregistered receivers.
+   * POST /connections/request-by-phone
+   */
+  @Post('request-by-phone')
+  @Roles('business')
+  async sendRelationshipRequestByPhone(
+    @CurrentUser() user: any,
+    @Body() dto: SendRelationshipRequestDto,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.connectionsService.sendRelationshipRequestByPhone(
+      user.businessId,
+      user.id,
+      dto,
     );
   }
 

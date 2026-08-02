@@ -56,13 +56,21 @@ export class OrdersService {
       );
     }
 
+    const actualReceiverBusinessId = connection.requesterId === senderId
+      ? connection.receiverId
+      : connection.requesterId;
+
+    if (!actualReceiverBusinessId) {
+      throw new BadRequestException('الطرف المستقبل لم يكتمل تسجيله في النظام بعد');
+    }
+
     const [senderBusiness, receiverBusiness] = await Promise.all([
       this.prisma.business.findUnique({
         where: { id: senderId },
         include: { user: true },
       }),
       this.prisma.business.findUnique({
-        where: { id: dto.receiverId },
+        where: { id: actualReceiverBusinessId },
         include: { user: true },
       }),
     ]);
@@ -138,7 +146,7 @@ export class OrdersService {
           orderNumber,
           clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
           senderId,
-          receiverId: dto.receiverId,
+          receiverId: actualReceiverBusinessId,
           status: initialStatus,
           isCash,
           currency,
@@ -161,7 +169,7 @@ export class OrdersService {
         // 1. Record the SALE movement (Debits receiver's account / increases debt for customer, records sale for supplier)
         await this.financeService.recordFinancialMovement(prisma, {
           senderId,
-          receiverId: dto.receiverId,
+          receiverId: actualReceiverBusinessId,
           amount: finalTotal.toString(),
           type: 'SALE',
           orderId: order.id,
@@ -176,7 +184,7 @@ export class OrdersService {
         // 2. If there is a paid amount (cash or down payment), record PAYMENT movement immediately
         if (paidAmount.greaterThan(0)) {
           await this.financeService.recordFinancialMovement(prisma, {
-            senderId: dto.receiverId,
+            senderId: actualReceiverBusinessId,
             receiverId: senderId,
             amount: paidAmount.toString(),
             type: 'PAYMENT',
@@ -205,7 +213,7 @@ export class OrdersService {
         },
       );
 
-      this.eventsGateway.emitToBusiness(dto.receiverId, 'NEW_ORDER', {
+      this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {
         id: order.id,
         orderNumber: order.orderNumber,
         senderName: senderBusiness.name,
@@ -811,53 +819,37 @@ export class OrdersService {
   private async resolveAcceptedConnection(senderId: string, receiverId: string, expectedRole?: 'CUSTOMER' | 'SUPPLIER') {
     if (!senderId || !receiverId) return null;
 
-    // 1. Check direct connection by ID or business IDs
-    let connection = await this.prisma.connection.findFirst({
-      where: {
-        status: 'ACCEPTED',
-        OR: [
-          { id: receiverId, OR: [{ requesterId: senderId }, { receiverId: senderId }] },
-          { requesterId: senderId, receiverId: receiverId },
-          { requesterId: receiverId, receiverId: senderId },
-        ],
-        ...(expectedRole ? {
-          OR: [
-            { requesterId: senderId, connectionType: expectedRole },
-            { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
-          ]
-        } : {}),
-      },
-      include: { account: true },
-    });
-
-    if (connection) return connection;
-
-    // 2. Check if receiverId is user.id
+    // 1. Resolve receiverBiz if receiverId is user.id or business.id
     const receiverBiz = await this.prisma.business.findFirst({
       where: { OR: [{ id: receiverId }, { userId: receiverId }] },
       select: { id: true },
     });
+    const actualBizId = receiverBiz?.id || receiverId;
 
-    if (receiverBiz?.id) {
-      connection = await this.prisma.connection.findFirst({
-        where: {
-          status: 'ACCEPTED',
-          OR: [
-            { requesterId: senderId, receiverId: receiverBiz.id },
-            { requesterId: receiverBiz.id, receiverId: senderId },
-          ],
-          ...(expectedRole ? {
+    const roleFilter = expectedRole ? [
+      { requesterId: senderId, connectionType: expectedRole },
+      { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
+    ] : undefined;
+
+    // 2. Query connection using proper AND/OR nesting in Prisma
+    let connection = await this.prisma.connection.findFirst({
+      where: {
+        status: 'ACCEPTED',
+        AND: [
+          {
             OR: [
-              { requesterId: senderId, connectionType: expectedRole },
-              { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
-            ]
-          } : {}),
-        },
-        include: { account: true },
-      });
+              { id: receiverId, OR: [{ requesterId: senderId }, { receiverId: senderId }] },
+              { requesterId: senderId, receiverId: actualBizId },
+              { requesterId: actualBizId, receiverId: senderId },
+            ],
+          },
+          ...(roleFilter ? [{ OR: roleFilter }] : []),
+        ],
+      },
+      include: { account: true, requester: true, receiver: true },
+    });
 
-      if (connection) return connection;
-    }
+    if (connection) return connection;
 
     // 3. Check if receiverId is a CustomerSupplierLink or linked dual connection
     const link = await this.prisma.customerSupplierLink.findFirst({

@@ -100,25 +100,34 @@ model Business {
 }
 
 model Connection {
-  id              String    @id @default(uuid())
-  requesterId     String
-  receiverId      String
-  status          String    @default("PENDING")
-  connectionType  String    @default("CUSTOMER")
-  showPrices      Boolean   @default(false)
-  blockedById     String?
-  lastRequestedAt DateTime? @default(now())
-  retryCount      Int       @default(0)
-  isReadReceiver  Boolean   @default(false)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  account         Account?
-  receiver        Business  @relation("Receiver", fields: [receiverId], references: [id])
-  requester       Business  @relation("Requester", fields: [requesterId], references: [id])
-  customerLinks   CustomerSupplierLink[] @relation("CustomerLink")
-  supplierLinks   CustomerSupplierLink[] @relation("SupplierLink")
+  id                    String    @id @default(uuid())
+  requesterId           String
+  receiverId            String?
+  status                String    @default("PENDING")
+  connectionType        String    @default("CUSTOMER")
+  showPrices            Boolean   @default(false)
+  blockedById           String?
+  lastRequestedAt       DateTime? @default(now())
+  retryCount            Int       @default(0)
+  isReadReceiver        Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  // Fields for pending requests (unregistered receiver)
+  receiverPhone         String?   // phone number when receiver is not yet registered
+  pendingName           String?   // personal name stored pending registration
+  pendingBizName        String?   // business name stored pending registration
+  pendingOpenBalance    Decimal?  @db.Decimal(15, 2) // opening balance stored pending acceptance
+  pendingCreditLimit    Decimal?  @db.Decimal(15, 2) // credit limit stored pending acceptance
+  requiresReceiverInput Boolean   @default(false)   // true when sent from supplier screen
+  account               Account?
+  receiver              Business? @relation("Receiver", fields: [receiverId], references: [id])
+  requester             Business  @relation("Requester", fields: [requesterId], references: [id])
+  customerLinks         CustomerSupplierLink[] @relation("CustomerLink")
+  supplierLinks         CustomerSupplierLink[] @relation("SupplierLink")
 
   @@unique([requesterId, receiverId, connectionType])
+  @@unique([requesterId, receiverPhone, connectionType])
+  @@index([receiverPhone])
   @@map("connections")
 }
 

@@ -107,6 +107,12 @@ export class DueRemindersService implements OnModuleInit, OnModuleDestroy {
         const creditorBusiness = balance.greaterThan(0)
           ? connection.requester
           : connection.receiver;
+
+        if (!debtorBusiness || !creditorBusiness) {
+          skipped += 1;
+          continue;
+        }
+
         const amount = balance.abs();
 
         const created = await this.createReminderLogOnce({

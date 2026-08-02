@@ -142,28 +142,33 @@ export class FinanceService {
     }
 
     // 2. Calculate balance change from requester's perspective
-    // Balance > 0: Receiver owes Requester (له)
-    // Balance < 0: Requester owes Receiver (عليه)
+    // Balance Direction:
+    // Positive balance (> 0):
+    //   - For CUSTOMER: Customer owes Merchant (عليه - مديونية العميل)
+    //   - For SUPPLIER: Merchant owes Supplier (له - مديونية للمورد)
+    // Negative balance (< 0):
+    //   - For CUSTOMER: Merchant owes Customer (له - رصيد دائن للعميل)
+    //   - For SUPPLIER: Supplier owes Merchant (عليه - مديونية على المورد)
     const isSenderRequester = connection.requesterId === senderId;
     let balanceChange = new Decimal(0);
 
     switch (type) {
-      case 'SALE': // Receiver (Merchant) sold to Sender (Customer) -> Sender owes Receiver more
-        balanceChange = isSenderRequester
-          ? decimalAmount.negated()
-          : decimalAmount;
-        break;
-      case 'PURCHASE': // Sender bought -> Sender owes Receiver more
-        balanceChange = isSenderRequester
-          ? decimalAmount.negated()
-          : decimalAmount;
-        break;
-      case 'PAYMENT': // Sender paid Receiver -> Sender's debt decreases
+      case 'SALE': // Merchant sold on credit -> Customer debt increases (+amount)
         balanceChange = isSenderRequester
           ? decimalAmount
           : decimalAmount.negated();
         break;
-      case 'ADJUSTMENT':
+      case 'PURCHASE': // Merchant bought on credit -> Supplier credit increases (+amount)
+        balanceChange = isSenderRequester
+          ? decimalAmount
+          : decimalAmount.negated();
+        break;
+      case 'PAYMENT': // Payment reduces debt/credit (-amount)
+        balanceChange = isSenderRequester
+          ? decimalAmount.negated()
+          : decimalAmount;
+        break;
+      case 'ADJUSTMENT': // Opening balance / Adjustment (+amount)
         balanceChange = isSenderRequester
           ? decimalAmount
           : decimalAmount.negated();
@@ -356,16 +361,18 @@ export class FinanceService {
     });
 
     if (!account) throw new NotFoundException('Account not found');
+    if (!account.connection.receiverId) return;
+    const receiverId = account.connection.receiverId;
 
     const transactions = await client.transaction.findMany({
       where: {
         OR: [
           {
             senderId: account.connection.requesterId,
-            receiverId: account.connection.receiverId,
+            receiverId,
           },
           {
-            senderId: account.connection.receiverId,
+            senderId: receiverId,
             receiverId: account.connection.requesterId,
           },
         ],
@@ -380,18 +387,18 @@ export class FinanceService {
       switch (t.transactionType) {
         case 'SALE':
           balance = isSenderRequester
-            ? balance.minus(amount)
-            : balance.plus(amount);
+            ? balance.plus(amount)
+            : balance.minus(amount);
           break;
         case 'PURCHASE':
           balance = isSenderRequester
-            ? balance.minus(amount)
-            : balance.plus(amount);
+            ? balance.plus(amount)
+            : balance.minus(amount);
           break;
         case 'PAYMENT':
           balance = isSenderRequester
-            ? balance.plus(amount)
-            : balance.minus(amount);
+            ? balance.minus(amount)
+            : balance.plus(amount);
           break;
         case 'ADJUSTMENT':
           balance = isSenderRequester
@@ -401,12 +408,28 @@ export class FinanceService {
       }
     }
 
+    const isCustomer = account.connection.connectionType === 'CUSTOMER';
+    const numBalance = balance.toNumber();
+
+    let totalDebit = '0';
+    let totalCredit = '0';
+
+    if (isCustomer) {
+      // Customer: balance > 0 = عليه (totalDebit), balance < 0 = له (totalCredit)
+      if (numBalance > 0) totalDebit = balance.toString();
+      if (numBalance < 0) totalCredit = balance.abs().toString();
+    } else {
+      // Supplier: balance > 0 = له (totalCredit), balance < 0 = عليه (totalDebit)
+      if (numBalance > 0) totalCredit = balance.toString();
+      if (numBalance < 0) totalDebit = balance.abs().toString();
+    }
+
     return client.account.update({
       where: { id: accountId },
       data: {
         balance: balance.toString(),
-        totalCredit: balance.greaterThan(0) ? balance.toString() : '0',
-        totalDebit: balance.lessThan(0) ? balance.abs().toString() : '0',
+        totalDebit,
+        totalCredit,
       },
     });
   }

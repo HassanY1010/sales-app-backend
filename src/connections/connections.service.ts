@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../database/prisma.service';
 import { CreateConnectionDto } from './dto/create-connection.dto';
 import { ManualAddConnectionDto } from './dto/manual-add-connection.dto';
+import { SendRelationshipRequestDto } from './dto/send-relationship-request.dto';
 import { Decimal } from 'decimal.js';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import * as bcrypt from 'bcrypt';
@@ -17,14 +18,39 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
 import { FinanceService } from '../finance/finance.service';
 
+import { Logger } from '@nestjs/common';
+
 @Injectable()
 export class ConnectionsService {
+  private readonly logger = new Logger(ConnectionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
     private readonly eventsGateway: EventsGateway,
     private readonly financeService: FinanceService,
   ) {}
+
+  /**
+   * Universal phone number normalizer.
+   * Strips non-digits, leading country code (+967, 00967, 967) and leading zero.
+   * Ensures '+967777123456', '967777123456', '0777123456', and '777123456'
+   * all normalize to the exact same string '777123456'.
+   */
+  public normalizePhoneNumber(phone: string): string {
+    if (!phone) return '';
+    let digits = phone.trim().replace(/\D/g, '');
+    if (digits.startsWith('00')) {
+      digits = digits.substring(2);
+    }
+    if (digits.startsWith('967')) {
+      digits = digits.substring(3);
+    }
+    if (digits.startsWith('0')) {
+      digits = digits.substring(1);
+    }
+    return digits;
+  }
 
   private normalizeConnection(connection: any, businessId: string, includeLinks = true) {
     if (!connection) return null;
@@ -35,11 +61,32 @@ export class ConnectionsService {
     if (account) {
       const dbBalance = new Decimal(account.balance as any || 0);
       const normalizedBalance = isRequester ? dbBalance : dbBalance.negated();
+      const effectiveType = isRequester
+        ? plainConnection.connectionType
+        : plainConnection.connectionType === 'CUSTOMER'
+        ? 'SUPPLIER'
+        : 'CUSTOMER';
+      const isCustomer = effectiveType === 'CUSTOMER';
+      const numBalance = normalizedBalance.toNumber();
+
+      let totalDebit = 0;
+      let totalCredit = 0;
+
+      if (isCustomer) {
+        // Customer: balance > 0 = عليه (totalDebit), balance < 0 = له (totalCredit)
+        if (numBalance > 0) totalDebit = numBalance;
+        if (numBalance < 0) totalCredit = Math.abs(numBalance);
+      } else {
+        // Supplier: balance > 0 = له (totalCredit), balance < 0 = عليه (totalDebit)
+        if (numBalance > 0) totalCredit = numBalance;
+        if (numBalance < 0) totalDebit = Math.abs(numBalance);
+      }
+
       account = {
         ...account,
-        balance: normalizedBalance.toNumber(),
-        totalCredit: normalizedBalance.greaterThan(0) ? normalizedBalance.toNumber() : 0,
-        totalDebit: normalizedBalance.lessThan(0) ? normalizedBalance.abs().toNumber() : 0,
+        balance: numBalance,
+        totalDebit,
+        totalCredit,
       };
     }
 
@@ -269,10 +316,21 @@ export class ConnectionsService {
       throw new BadRequestException(`الارتباط بالفعل ${connection.status}`);
     }
 
-    const creditLimit = options?.creditLimit ?? 100000;
+    // Enforce financial data when the request came from supplier screen
+    if (connection.requiresReceiverInput) {
+      if (options?.openingBalance === undefined || options?.openingBalance === null) {
+        throw new BadRequestException('يجب إدخال الرصيد الافتتاحي لقبول هذا الطلب');
+      }
+      if (options?.creditLimit === undefined || options?.creditLimit === null) {
+        throw new BadRequestException('يجب إدخال سقف المديونية لقبول هذا الطلب');
+      }
+    }
+
+    // Use pending values as defaults when they exist (from customer screen requests)
+    const creditLimit = options?.creditLimit ?? Number(connection.pendingCreditLimit ?? 100000);
     const billingCycle = options?.billingCycle ?? null;
     const dueDate = options?.dueDate ? new Date(options.dueDate) : null;
-    const openingBalance = options?.openingBalance ?? 0;
+    const openingBalance = options?.openingBalance ?? Number(connection.pendingOpenBalance ?? 0);
     const showPrices = options?.showPrices ?? false;
 
     const isRequester = connection.requesterId === businessId;
@@ -328,7 +386,7 @@ export class ConnectionsService {
       if (openingBalance !== 0 && (!existingAccount || new Decimal(existingAccount.balance as any || 0).isZero())) {
         await this.financeService.recordFinancialMovement(prisma, {
           senderId: connection.requesterId,
-          receiverId: connection.receiverId,
+          receiverId: connection.receiverId!,
           amount: Math.abs(openingBalance),
           type: 'ADJUSTMENT',
           note: `رصيد افتتاحي: ${openingBalance}`,
@@ -444,7 +502,7 @@ export class ConnectionsService {
     await this.notificationsService.sendPushNotification(
       updated.requester.user.id,
       'تم رفض طلب الارتباط',
-      `لقد تم رفض طلب الارتباط من قبل ${updated.receiver.name}.`,
+      `لقد تم رفض طلب الارتباط من قبل ${updated.receiver?.name ?? 'المستلم'}.`,
       {
         type: 'connection_rejected',
         notificationType: 'connection_rejected',
@@ -460,7 +518,7 @@ export class ConnectionsService {
       'CONNECTION_REJECTED',
       {
         id: updated.id,
-        receiverName: updated.receiver.name,
+        receiverName: updated.receiver?.name ?? '',
       },
     );
 
@@ -789,8 +847,8 @@ export class ConnectionsService {
     });
 
     if (initialBalance !== 0) {
-      const senderId = initialBalance > 0 ? created.requesterId : created.receiverId;
-      const receiverId = initialBalance > 0 ? created.receiverId : created.requesterId;
+      const senderId = initialBalance > 0 ? created.requesterId : created.receiverId!;
+      const receiverId = initialBalance > 0 ? created.receiverId! : created.requesterId;
       const amount = Math.abs(initialBalance);
 
       await this.prisma.transaction.create({
@@ -845,6 +903,10 @@ export class ConnectionsService {
 
     const account = connection.account;
     const isRequester = connection.requesterId === businessId;
+    if (!connection.receiverId) {
+      throw new BadRequestException('الارتباط غير مكتمل (لا يوجد طرف مستلم)');
+    }
+    const receiverId = connection.receiverId;
 
     return this.prisma.$transaction(async (tx) => {
       let dbOpeningBalance = terms.openingBalance;
@@ -874,8 +936,8 @@ export class ConnectionsService {
             transactionType: 'ADJUSTMENT',
             note: { startsWith: 'رصيد افتتاحي' },
             OR: [
-              { senderId: connection.requesterId, receiverId: connection.receiverId },
-              { senderId: connection.receiverId, receiverId: connection.requesterId },
+              { senderId: connection.requesterId, receiverId: connection.receiverId! },
+              { senderId: connection.receiverId!, receiverId: connection.requesterId },
             ],
           },
         });
@@ -885,8 +947,8 @@ export class ConnectionsService {
             await tx.transaction.delete({ where: { id: existingAdjustment.id } });
           }
         } else {
-          const senderId = dbOpeningBalance > 0 ? connection.requesterId : connection.receiverId;
-          const receiverId = dbOpeningBalance > 0 ? connection.receiverId : connection.requesterId;
+          const senderId = dbOpeningBalance > 0 ? connection.requesterId : receiverId;
+          const targetReceiverId = dbOpeningBalance > 0 ? receiverId : connection.requesterId;
           const amount = Math.abs(dbOpeningBalance);
 
           if (existingAdjustment) {
@@ -895,7 +957,7 @@ export class ConnectionsService {
               data: {
                 amount,
                 senderId,
-                receiverId,
+                receiverId: targetReceiverId,
                 note: `رصيد افتتاحي: ${terms.openingBalance}`,
               },
             });
@@ -905,7 +967,7 @@ export class ConnectionsService {
                 transactionType: 'ADJUSTMENT',
                 amount,
                 senderId,
-                receiverId,
+                receiverId: targetReceiverId,
                 note: `رصيد افتتاحي: ${terms.openingBalance}`,
               },
             });
@@ -1415,6 +1477,7 @@ export class ConnectionsService {
     }
 
     const otherPartyId = connection.requesterId === businessId ? connection.receiverId : connection.requesterId;
+    if (!otherPartyId) return [];
 
     // Check if this connection is a Customer or Supplier from our perspective
     const isCustomer = (connection.requesterId === businessId && connection.connectionType === 'CUSTOMER') ||
@@ -1441,13 +1504,13 @@ export class ConnectionsService {
     });
 
     // Filter out already linked candidates
-    const filtered = candidates.filter(c => {
-      const isLinked = c.customerLinks.some(l => l.status === 'ACTIVE') ||
-                       c.supplierLinks.some(l => l.status === 'ACTIVE');
+    const filtered = candidates.filter((c: any) => {
+      const isLinked = (c.customerLinks || []).some((l: any) => l.status === 'ACTIVE') ||
+                       (c.supplierLinks || []).some((l: any) => l.status === 'ACTIVE');
       return !isLinked;
     });
 
-    return filtered.map(c => this.normalizeConnection(c, businessId));
+    return filtered.map((c: any) => this.normalizeConnection(c, businessId));
   }
 
   /**
@@ -1551,5 +1614,403 @@ export class ConnectionsService {
 
     return null;
   }
-}
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // RELATIONSHIP REQUEST BY PHONE NUMBER
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Send a relationship request by phone number.
+   * Handles both registered and unregistered receivers.
+   * - Registered: creates a PENDING connection with receiverId
+   * - Unregistered: creates a PENDING connection with receiverPhone + deferred data
+   * Enforces the bidirectional role rule:
+   *   - From customer screen: connectionType=CUSTOMER, requiresReceiverInput=false
+   *   - From supplier screen: connectionType=SUPPLIER, requiresReceiverInput=true
+   */
+  async sendRelationshipRequestByPhone(
+    businessId: string,
+    userId: string,
+    dto: SendRelationshipRequestDto,
+  ) {
+    if (!dto.phoneNumber) {
+      throw new BadRequestException('رقم الهاتف مطلوب');
+    }
+
+    // Validate financial values
+    if (dto.openingBalance !== undefined && isNaN(dto.openingBalance)) {
+      throw new BadRequestException('الرصيد الافتتاحي غير صالح');
+    }
+    if (dto.creditLimit !== undefined && (isNaN(dto.creditLimit) || dto.creditLimit < 0)) {
+      throw new BadRequestException('سقف المديونية يجب أن يكون صفراً أو أكثر');
+    }
+
+    const normalizedPhone = this.normalizePhoneNumber(dto.phoneNumber);
+    if (!normalizedPhone) {
+      throw new BadRequestException('رقم الهاتف المدخل غير صالح');
+    }
+    const requiresReceiverInput = dto.connectionType === 'SUPPLIER';
+
+    // Check if sender is trying to link themselves
+    const senderBusiness = await this.prisma.business.findUnique({
+      where: { id: businessId },
+    });
+    if (senderBusiness?.phoneNumber === normalizedPhone) {
+      throw new BadRequestException('لا يمكنك الارتباط بنفسك');
+    }
+
+    // Search for a registered business with this phone
+    let targetBusiness = await this.prisma.business.findFirst({
+      where: { phoneNumber: normalizedPhone },
+      include: { user: true },
+    });
+
+    // Also search by user phone if not found via business
+    if (!targetBusiness) {
+      const targetUser = await this.prisma.user.findFirst({
+        where: { phoneNumber: normalizedPhone, isActive: true },
+        include: { business: true },
+      });
+      if (targetUser?.business) {
+        targetBusiness = targetUser.business as any;
+        (targetBusiness as any).user = targetUser;
+      }
+    }
+
+    // ── CASE 1: Receiver is a registered user ─────────────────────────────
+    if (targetBusiness) {
+      if (targetBusiness.id === businessId) {
+        throw new BadRequestException('لا يمكنك الارتباط بنفسك');
+      }
+
+      const requestedRole = dto.connectionType;
+      const invertedRole = requestedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER';
+
+      // Check for existing connection
+      const existing = await this.prisma.connection.findFirst({
+        where: {
+          OR: [
+            { requesterId: businessId, receiverId: targetBusiness.id, connectionType: requestedRole },
+            { requesterId: targetBusiness.id, receiverId: businessId, connectionType: invertedRole },
+          ],
+        },
+      });
+
+      if (existing) {
+        if (existing.status === 'ACCEPTED' || existing.status === 'PENDING') {
+          const msg = requestedRole === 'CUSTOMER'
+            ? 'هذا العميل موجود بالفعل أو لديه طلب ارتباط معلق'
+            : 'هذا المورد موجود بالفعل أو لديه طلب ارتباط معلق';
+          throw new ConflictException(msg);
+        }
+        if (existing.status === 'BLOCKED') {
+          throw new BadRequestException('الارتباط محظور. يجب إلغاء الحظر أولاً');
+        }
+        if (existing.status === 'REJECTED') {
+          if (existing.retryCount >= 3) {
+            throw new BadRequestException('لقد استنفدت الحد الأقصى لمحاولات الإرسال (3 محاولات)');
+          }
+          const lastRequested = existing.lastRequestedAt ? new Date(existing.lastRequestedAt).getTime() : 0;
+          const cooldownMs = 24 * 60 * 60 * 1000;
+          if (Date.now() - lastRequested < cooldownMs) {
+            const hoursLeft = Math.ceil((cooldownMs - (Date.now() - lastRequested)) / (60 * 60 * 1000));
+            throw new BadRequestException(`يرجى الانتظار ${hoursLeft} ساعة قبل إعادة المحاولة`);
+          }
+        }
+      }
+
+      return this.prisma.$transaction(async (tx) => {
+        let finalConnection: any;
+
+        if (existing && existing.status === 'REJECTED') {
+          finalConnection = await tx.connection.update({
+            where: { id: existing.id },
+            data: {
+              status: 'PENDING',
+              requesterId: businessId,
+              receiverId: targetBusiness!.id,
+              connectionType: dto.connectionType,
+              retryCount: { increment: 1 },
+              isReadReceiver: false,
+              lastRequestedAt: new Date(),
+              requiresReceiverInput,
+              pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
+              pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
+            },
+            include: {
+              requester: true,
+              receiver: { include: { user: true } },
+            },
+          });
+        } else {
+          finalConnection = await tx.connection.create({
+            data: {
+              requesterId: businessId,
+              receiverId: targetBusiness!.id,
+              connectionType: dto.connectionType,
+              status: 'PENDING',
+              isReadReceiver: false,
+              lastRequestedAt: new Date(),
+              requiresReceiverInput,
+              pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
+              pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
+            },
+            include: {
+              requester: true,
+              receiver: { include: { user: true } },
+            },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            businessId,
+            action: 'SEND_RELATIONSHIP_REQUEST',
+            resource: 'CONNECTION',
+            resourceId: finalConnection.id,
+            details: {
+              connectionType: dto.connectionType,
+              receiverPhone: normalizedPhone,
+              requiresReceiverInput,
+              registeredReceiver: true,
+            },
+          },
+        });
+
+        // Notify registered receiver
+        const receiverUserId = (targetBusiness as any).user?.id;
+        if (receiverUserId) {
+          await this.notificationsService.sendPushNotification(
+            receiverUserId,
+            'طلب ارتباط جديد',
+            `يريد ${finalConnection.requester.name} الارتباط بحسابك كـ${dto.connectionType === 'CUSTOMER' ? 'مورد' : 'عميل'}.`,
+            {
+              type: 'connection_request',
+              notificationType: 'connection_request',
+              entityType: 'connection_request',
+              entityId: finalConnection.id,
+              requestId: finalConnection.id,
+              requiresInput: requiresReceiverInput ? 'true' : 'false',
+            },
+          );
+        }
+
+        this.eventsGateway.emitToBusiness(targetBusiness!.id, 'NEW_CONNECTION_REQUEST', {
+          id: finalConnection.id,
+          requesterName: finalConnection.requester.name,
+          connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
+          requiresInput: requiresReceiverInput,
+        });
+
+        return this.normalizeConnection(finalConnection, businessId);
+      });
+    }
+
+    // ── CASE 2: Receiver is NOT registered yet ────────────────────────────
+    // Validate that name/businessName are provided for unregistered users
+    if (!dto.personalName && !dto.businessName) {
+      throw new BadRequestException('يجب إدخال اسم الشخص أو اسم النشاط عند الإضافة لمستخدم غير مسجل');
+    }
+
+    // Check for existing pending request to same phone number
+    const existingByPhone = await this.prisma.connection.findFirst({
+      where: {
+        requesterId: businessId,
+        receiverPhone: normalizedPhone,
+        status: 'PENDING',
+        connectionType: dto.connectionType,
+      },
+    });
+
+    if (existingByPhone) {
+      throw new ConflictException(
+        dto.connectionType === 'CUSTOMER'
+          ? 'لديك طلب ارتباط معلق بالفعل لهذا الرقم كعميل'
+          : 'لديك طلب ارتباط معلق بالفعل لهذا الرقم كمورد',
+      );
+    }
+
+    // Create pending connection with phone — no shadow user
+    try {
+      const pendingConnection = await this.prisma.connection.create({
+        data: {
+          requesterId: businessId,
+          receiverId: null,
+          receiverPhone: normalizedPhone,
+          connectionType: dto.connectionType,
+          status: 'PENDING',
+          isReadReceiver: false,
+          lastRequestedAt: new Date(),
+          requiresReceiverInput,
+          pendingName: dto.personalName ?? null,
+          pendingBizName: dto.businessName ?? null,
+          pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
+          pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
+        },
+        include: { requester: true },
+      });
+
+      await this.prisma.auditLog.create({
+        data: {
+          userId,
+          businessId,
+          action: 'SEND_RELATIONSHIP_REQUEST',
+          resource: 'CONNECTION',
+          resourceId: pendingConnection.id,
+          details: {
+            connectionType: dto.connectionType,
+            receiverPhone: normalizedPhone,
+            requiresReceiverInput,
+            registeredReceiver: false,
+          },
+        },
+      });
+
+      return {
+        id: pendingConnection.id,
+        status: 'PENDING',
+        connectionType: dto.connectionType,
+        receiverPhone: normalizedPhone,
+        pendingName: dto.personalName,
+        pendingBizName: dto.businessName,
+        requiresReceiverInput,
+        registeredReceiver: false,
+        message: 'تم حفظ الطلب. سيظهر للطرف الآخر فور تسجيله في النظام.',
+      };
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          dto.connectionType === 'CUSTOMER'
+            ? 'لديك طلب ارتباط معلق بالفعل لهذا الرقم كعميل'
+            : 'لديك طلب ارتباط معلق بالفعل لهذا الرقم كمورد',
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Called by AuthService after a new user registers.
+   * Finds all PENDING connections where receiverPhone matches the new user's phone
+   * and migrates them to use the actual receiverId atomically inside a Prisma Transaction.
+   * Notifications are dispatched after successful transaction commit.
+   * Returns count of linked requests.
+   */
+  async linkPendingRequestsAfterRegistration(
+    phoneNumber: string,
+    newBusinessId: string,
+    newUserId: string,
+  ): Promise<number> {
+    const normalizedPhone = this.normalizePhoneNumber(phoneNumber);
+    if (!normalizedPhone) return 0;
+
+    const notificationsToSend: Array<{
+      title: string;
+      body: string;
+      payload: any;
+      connectionId: string;
+    }> = [];
+
+    // Atomic DB Transaction: migrate all pending requests or rollback on error
+    const linkedCount = await this.prisma.$transaction(async (tx) => {
+      const pending = await tx.connection.findMany({
+        where: {
+          receiverPhone: normalizedPhone,
+          receiverId: null,
+          status: 'PENDING',
+        },
+        include: { requester: true },
+      });
+
+      if (pending.length === 0) return 0;
+
+      let count = 0;
+      for (const conn of pending) {
+        // Check uniqueness before migrating
+        const alreadyExists = await tx.connection.findFirst({
+          where: {
+            requesterId: conn.requesterId,
+            receiverId: newBusinessId,
+            connectionType: conn.connectionType,
+            id: { not: conn.id },
+          },
+        });
+
+        if (alreadyExists) {
+          // Duplicate — cancel the phone-based pending request
+          await tx.connection.update({
+            where: { id: conn.id },
+            data: { status: 'CANCELLED', receiverPhone: null },
+          });
+          continue;
+        }
+
+        // Migrate receiverPhone → receiverId atomically
+        await tx.connection.update({
+          where: { id: conn.id },
+          data: {
+            receiverId: newBusinessId,
+            receiverPhone: null,
+          },
+        });
+
+        const notifTitle =
+          conn.connectionType === 'CUSTOMER'
+            ? 'طلب ارتباط بانتظارك كمورد'
+            : 'طلب ارتباط بانتظارك كعميل';
+        const notifBody = `${conn.requester.name} يريد الارتباط بحسابك. يمكنك قبول أو رفض الطلب.`;
+
+        notificationsToSend.push({
+          title: notifTitle,
+          body: notifBody,
+          payload: {
+            type: 'connection_request',
+            notificationType: 'connection_request',
+            entityType: 'connection_request',
+            entityId: conn.id,
+            requestId: conn.id,
+            requiresInput: conn.requiresReceiverInput ? 'true' : 'false',
+          },
+          connectionId: conn.id,
+        });
+
+        count++;
+      }
+      return count;
+    });
+
+    // Safely send push notifications and socket events AFTER transaction commits
+    for (const item of notificationsToSend) {
+      await this.notificationsService
+        .sendPushNotification(
+          newUserId,
+          item.title,
+          item.body,
+          item.payload,
+        )
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to send push notification for connection ${item.connectionId}: ${err?.message}`,
+          ),
+        );
+
+      this.eventsGateway.emitToBusiness(newBusinessId, 'NEW_CONNECTION_REQUEST', {
+        id: item.connectionId,
+        requiresInput: item.payload.requiresInput === 'true',
+      });
+    }
+
+    return linkedCount;
+  }
+
+  /**
+   * Get pending connection requests by phone number (for admin/debug).
+   */
+  async getPendingRequestsByPhone(phone: string) {
+    return this.prisma.connection.findMany({
+      where: { receiverPhone: phone, status: 'PENDING' },
+      include: { requester: true },
+    });
+  }
+}

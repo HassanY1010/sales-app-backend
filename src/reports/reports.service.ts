@@ -30,19 +30,21 @@ export class ReportsService {
       },
     });
 
-    return connections.map((conn) => {
-      const isRequester = conn.requesterId === businessId;
-      const otherBusiness = isRequester ? conn.receiver : conn.requester;
-      const amountOwedToMe = isRequester
-        ? conn.account!.balance.toString()
-        : new Decimal(conn.account!.balance as any).abs().toString();
+    return connections
+      .filter((conn) => conn.receiver && conn.requester)
+      .map((conn) => {
+        const isRequester = conn.requesterId === businessId;
+        const otherBusiness = isRequester ? conn.receiver! : conn.requester;
+        const amountOwedToMe = isRequester
+          ? conn.account!.balance.toString()
+          : new Decimal(conn.account!.balance as any).abs().toString();
 
-      return {
-        businessId: otherBusiness.id,
-        businessName: otherBusiness.name,
-        amount: amountOwedToMe,
-      };
-    });
+        return {
+          businessId: otherBusiness.id,
+          businessName: otherBusiness.name,
+          amount: amountOwedToMe,
+        };
+      });
   }
 
   async getMyDebts(businessId: string, query: any = {}) {
@@ -69,19 +71,21 @@ export class ReportsService {
       },
     });
 
-    return connections.map((conn) => {
-      const isRequester = conn.requesterId === businessId;
-      const otherBusiness = isRequester ? conn.receiver : conn.requester;
-      const amountIOwe = isRequester
-        ? new Decimal(conn.account!.balance as any).abs().toString()
-        : conn.account!.balance.toString();
+    return connections
+      .filter((conn) => conn.receiver && conn.requester)
+      .map((conn) => {
+        const isRequester = conn.requesterId === businessId;
+        const otherBusiness = isRequester ? conn.receiver! : conn.requester;
+        const amountIOwe = isRequester
+          ? new Decimal(conn.account!.balance as any).abs().toString()
+          : conn.account!.balance.toString();
 
-      return {
-        businessId: otherBusiness.id,
-        businessName: otherBusiness.name,
-        amount: amountIOwe,
-      };
-    });
+        return {
+          businessId: otherBusiness.id,
+          businessName: otherBusiness.name,
+          amount: amountIOwe,
+        };
+      });
   }
 
   async getSummary(businessId: string, query: any = {}) {
@@ -338,28 +342,30 @@ export class ReportsService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    return connections.map((connection) => {
-      const isRequester = connection.requesterId === businessId;
-      const otherBusiness = isRequester
-        ? connection.receiver
-        : connection.requester;
-      const balance = new Decimal((connection.account?.balance as any) || 0);
-      const amountForMe = isRequester ? balance : balance.negated();
+    return connections
+      .filter((conn) => conn.receiver && conn.requester)
+      .map((connection) => {
+        const isRequester = connection.requesterId === businessId;
+        const otherBusiness = isRequester
+          ? connection.receiver!
+          : connection.requester;
+        const balance = new Decimal((connection.account?.balance as any) || 0);
+        const amountForMe = isRequester ? balance : balance.negated();
 
-      return {
-        connectionId: connection.id,
-        businessId: otherBusiness.id,
-        businessName: otherBusiness.name,
-        dueDate: connection.account?.dueDate,
-        billingCycle: connection.account?.billingCycle,
-        balance: balance.toString(),
-        amount: amountForMe.abs().toString(),
-        direction: amountForMe.greaterThan(0) ? 'RECEIVABLE' : 'PAYABLE',
-        isOverdue: connection.account?.dueDate
-          ? connection.account.dueDate <= new Date()
-          : false,
-      };
-    });
+        return {
+          connectionId: connection.id,
+          businessId: otherBusiness.id,
+          businessName: otherBusiness.name,
+          dueDate: connection.account?.dueDate,
+          billingCycle: connection.account?.billingCycle,
+          balance: balance.toString(),
+          amount: amountForMe.abs().toString(),
+          direction: amountForMe.greaterThan(0) ? 'RECEIVABLE' : 'PAYABLE',
+          isOverdue: connection.account?.dueDate
+            ? connection.account.dueDate <= new Date()
+            : false,
+        };
+      });
   }
 
   async getRecentActivity(businessId: string) {

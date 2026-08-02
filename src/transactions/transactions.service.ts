@@ -234,13 +234,15 @@ export class TransactionsService {
             connection.account.id,
             tx,
           );
-          const creditLimit = new Decimal(rebuiltAccount.creditLimit as any);
-          const currentDebit = new Decimal(rebuiltAccount.totalDebit as any);
+          if (rebuiltAccount) {
+            const creditLimit = new Decimal(rebuiltAccount.creditLimit as any);
+            const currentDebit = new Decimal(rebuiltAccount.totalDebit as any);
 
-          if (creditLimit.greaterThan(0) && currentDebit.greaterThan(creditLimit)) {
-            throw new BadRequestException(
-              `تعذر تعديل السند: القيمة الجديدة تؤدي لتجاوز سقف المديونية للعميل. سقف المديونية: ${creditLimit.toFixed(2)}، الرصيد بعد التعديل: ${currentDebit.toFixed(2)}.`
-            );
+            if (creditLimit.greaterThan(0) && currentDebit.greaterThan(creditLimit)) {
+              throw new BadRequestException(
+                `تعذر تعديل السند: القيمة الجديدة تؤدي لتجاوز سقف المديونية للعميل. سقف المديونية: ${creditLimit.toFixed(2)}، الرصيد بعد التعديل: ${currentDebit.toFixed(2)}.`
+              );
+            }
           }
         }
       }

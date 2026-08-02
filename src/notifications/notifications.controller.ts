@@ -218,6 +218,8 @@ export class NotificationsController {
         ? connection.receiver
         : connection.requester;
 
+      if (!targetBusiness) continue;
+
       const notification = await this.notificationsService.notifyUser(
         targetBusiness.userId,
         title,

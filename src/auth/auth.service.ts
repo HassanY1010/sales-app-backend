@@ -4,6 +4,8 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -12,6 +14,7 @@ import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ConnectionsService } from '../connections/connections.service';
 
 @Injectable()
 export class AuthService {
@@ -28,6 +31,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    @Inject(forwardRef(() => ConnectionsService))
+    private readonly connectionsService: ConnectionsService,
   ) {}
 
   private normalizeIdentifier(identifier: string): string {
@@ -148,6 +153,22 @@ export class AuthService {
       Array.isArray(userAgent) ? userAgent.join(',') : userAgent,
     );
     const { password: _, securityPin: __, ...safeUser } = user;
+
+    // Link any pending relationship requests waiting for this phone number
+    if (user.business?.id) {
+      this.connectionsService
+        .linkPendingRequestsAfterRegistration(
+          normalizedPhone,
+          user.business.id,
+          user.id,
+        )
+        .catch((err) =>
+          this.logger.warn(
+            `linkPendingRequestsAfterRegistration failed for ${normalizedPhone}: ${err?.message}`,
+          ),
+        );
+    }
+
     return { ...tokens, user: safeUser };
   }
 
