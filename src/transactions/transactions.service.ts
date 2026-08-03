@@ -73,14 +73,15 @@ export class TransactionsService {
 
 
   async getTransactions(businessId: string, query: GetTransactionsDto) {
-    const { page = 1, limit = 10, relatedBusinessId, type } = query;
+    const { page = 1, limit = 10, relatedBusinessId, connectionId, type } = query;
 
     const where: any = {
       OR: [{ senderId: businessId }, { receiverId: businessId }],
     };
 
-    // Filter: only transactions with a specific counterparty
-    if (relatedBusinessId) {
+    if (connectionId) {
+      where.connectionId = connectionId;
+    } else if (relatedBusinessId) {
       where.OR = [
         { senderId: businessId, receiverId: relatedBusinessId },
         { senderId: relatedBusinessId, receiverId: businessId },

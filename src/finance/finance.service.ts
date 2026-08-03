@@ -164,9 +164,7 @@ export class FinanceService {
           : decimalAmount.negated();
         break;
       case 'PAYMENT': // Payment reduces debt/credit (-amount)
-        balanceChange = isSenderRequester
-          ? decimalAmount.negated()
-          : decimalAmount;
+        balanceChange = decimalAmount.negated();
         break;
       case 'ADJUSTMENT': // Opening balance / Adjustment (+amount)
         balanceChange = isSenderRequester
@@ -186,7 +184,7 @@ export class FinanceService {
 
     // 4. Update totalCredit and totalDebit based on the NEW balance
     // This maintains the "Snapshot" for easy UI reading
-    const newBalance = new Decimal(updatedAccount.balance as any);
+    const newBalance = new Decimal(updatedAccount.balance?.toString() ?? '0');
     const newTotalCredit = newBalance.greaterThan(0)
       ? newBalance
       : new Decimal(0);
@@ -217,6 +215,7 @@ export class FinanceService {
         balanceAfter: newBalance.toString(),
         senderId,
         receiverId,
+        connectionId: connection.id,
         orderId,
         note,
       },
@@ -367,13 +366,13 @@ export class FinanceService {
     const transactions = await client.transaction.findMany({
       where: {
         OR: [
+          { connectionId: account.connectionId },
           {
-            senderId: account.connection.requesterId,
-            receiverId,
-          },
-          {
-            senderId: receiverId,
-            receiverId: account.connection.requesterId,
+            connectionId: null,
+            OR: [
+              { senderId: account.connection.requesterId, receiverId },
+              { senderId: receiverId, receiverId: account.connection.requesterId },
+            ],
           },
         ],
       },
@@ -396,9 +395,7 @@ export class FinanceService {
             : balance.minus(amount);
           break;
         case 'PAYMENT':
-          balance = isSenderRequester
-            ? balance.minus(amount)
-            : balance.plus(amount);
+          balance = balance.minus(amount);
           break;
         case 'ADJUSTMENT':
           balance = isSenderRequester

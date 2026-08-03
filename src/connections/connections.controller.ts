@@ -184,6 +184,7 @@ export class ConnectionsController {
     @CurrentUser() user: any,
     @Query() pagination: PaginationDto,
     @Query('search') search?: string,
+    @Query('type') type?: string,
   ) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
@@ -192,6 +193,7 @@ export class ConnectionsController {
       user.businessId,
       pagination,
       search,
+      type,
     );
   }
 

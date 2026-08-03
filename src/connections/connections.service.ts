@@ -56,16 +56,15 @@ export class ConnectionsService {
     if (!connection) return null;
     const plainConnection = JSON.parse(JSON.stringify(connection));
     const isRequester = plainConnection.requesterId === businessId;
+    const requestSource = plainConnection.requestSource || (plainConnection.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+    const effectiveType = isRequester
+      ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+      : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
     
     let account = plainConnection.account;
     if (account) {
       const dbBalance = new Decimal(account.balance as any || 0);
       const normalizedBalance = isRequester ? dbBalance : dbBalance.negated();
-      const effectiveType = isRequester
-        ? plainConnection.connectionType
-        : plainConnection.connectionType === 'CUSTOMER'
-        ? 'SUPPLIER'
-        : 'CUSTOMER';
       const isCustomer = effectiveType === 'CUSTOMER';
       const numBalance = normalizedBalance.toNumber();
 
@@ -93,11 +92,7 @@ export class ConnectionsService {
     const result: any = {
       ...plainConnection,
       account,
-      connectionType: isRequester
-        ? plainConnection.connectionType
-        : plainConnection.connectionType === 'CUSTOMER'
-        ? 'SUPPLIER'
-        : 'CUSTOMER',
+      connectionType: effectiveType,
       direction: isRequester ? 'SENT' : 'RECEIVED',
     };
 
@@ -222,12 +217,15 @@ export class ConnectionsService {
         });
       }
     } else {
-      // 4. Create new connection if none exists
+      const requestSource = dto.requestSource || (dto.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+      const connectionType = requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER';
+
       finalConnection = await this.prisma.connection.create({
         data: {
           requesterId: businessId,
           receiverId: dto.receiverId,
-          connectionType: dto.connectionType,
+          connectionType,
+          requestSource,
           isReadReceiver: false,
           lastRequestedAt: new Date(),
         },
@@ -254,15 +252,16 @@ export class ConnectionsService {
       },
     });
 
-    // 6. Send Notification (using inverted type so receiver sees correct relationship)
-    const isSupplierRequest = dto.connectionType === 'CUSTOMER';
+    const requestSource = finalConnection.requestSource || (dto.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+    const receiverRoleText = requestSource === 'CUSTOMERS' ? 'مورد' : 'عميل';
+    const isSupplierRequest = requestSource === 'CUSTOMERS';
     const customerId = isSupplierRequest ? dto.receiverId : businessId;
     const supplierId = isSupplierRequest ? businessId : dto.receiverId;
 
     await this.notificationsService.sendPushNotification(
       finalConnection.receiver.user.id,
       'طلب ارتباط جديد',
-      `يريد ${finalConnection.requester.name} الارتباط بحسابك.`,
+      `أرسل لك ${finalConnection.requester.name} طلب ارتباط كـ (${receiverRoleText}).`,
       {
         type: 'connection_request',
         notificationType: 'connection_request',
@@ -270,6 +269,7 @@ export class ConnectionsService {
         entityId: finalConnection.id,
         route: `app://connection-request/${finalConnection.id}`,
         requestId: finalConnection.id,
+        requestSource,
         customerId,
         supplierId,
       },
@@ -281,7 +281,8 @@ export class ConnectionsService {
       {
         id: finalConnection.id,
         requesterName: finalConnection.requester.name,
-        connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
+        requestSource,
+        connectionType: requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER',
       },
     );
 
@@ -529,11 +530,33 @@ export class ConnectionsService {
     businessId: string,
     pagination: PaginationDto,
     search?: string,
+    type?: string,
   ) {
     const { page = 1, limit = 10 } = pagination;
-    const where: any = {
-      OR: [{ requesterId: businessId }, { receiverId: businessId }],
-    };
+    const where: any = {};
+
+    if (type) {
+      const upperType = type.toUpperCase();
+      if (upperType === 'CUSTOMER') {
+        // Customer for businessId:
+        // Requester created CUSTOMER request, OR Receiver received SUPPLIER request
+        where.OR = [
+          { requesterId: businessId, connectionType: 'CUSTOMER' },
+          { receiverId: businessId, connectionType: 'SUPPLIER' },
+        ];
+      } else if (upperType === 'SUPPLIER') {
+        // Supplier for businessId:
+        // Requester created SUPPLIER request, OR Receiver received CUSTOMER request
+        where.OR = [
+          { requesterId: businessId, connectionType: 'SUPPLIER' },
+          { receiverId: businessId, connectionType: 'CUSTOMER' },
+        ];
+      } else {
+        where.OR = [{ requesterId: businessId }, { receiverId: businessId }];
+      }
+    } else {
+      where.OR = [{ requesterId: businessId }, { receiverId: businessId }];
+    }
 
     if (search) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(search.trim());
@@ -822,12 +845,14 @@ export class ConnectionsService {
     const initialBalance = Number(openingBalance ?? 0);
     const accountCreditLimit = Number(creditLimit ?? 100000);
 
+    const requestSource = dto.requestSource || (connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
     const created = await this.prisma.connection.create({
       data: {
         requesterId: myBusinessId,
         receiverId: targetBusiness.id,
         status: 'ACCEPTED',
         connectionType: connectionType,
+        requestSource,
         showPrices: showPrices ?? false,
         account: {
           create: {

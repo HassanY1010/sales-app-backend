@@ -1,4 +1,4 @@
-﻿import {
+import {
   IsEnum,
   IsNumber,
   IsOptional,
@@ -14,6 +14,10 @@ export class SendRelationshipRequestDto {
 
   @IsEnum(["CUSTOMER", "SUPPLIER"])
   connectionType: "CUSTOMER" | "SUPPLIER";
+
+  @IsEnum(["CUSTOMERS", "SUPPLIERS"])
+  @IsOptional()
+  requestSource?: "CUSTOMERS" | "SUPPLIERS";
 
   /**
    * Personal name of the contact (required when receiver is not registered).

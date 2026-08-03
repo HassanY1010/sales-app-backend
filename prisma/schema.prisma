@@ -105,6 +105,7 @@ model Connection {
   receiverId            String?
   status                String    @default("PENDING")
   connectionType        String    @default("CUSTOMER")
+  requestSource         String    @default("CUSTOMERS")
   showPrices            Boolean   @default(false)
   blockedById           String?
   lastRequestedAt       DateTime? @default(now())
@@ -124,6 +125,8 @@ model Connection {
   requester             Business  @relation("Requester", fields: [requesterId], references: [id])
   customerLinks         CustomerSupplierLink[] @relation("CustomerLink")
   supplierLinks         CustomerSupplierLink[] @relation("SupplierLink")
+  orders                Order[]
+  transactions          Transaction[]
 
   @@unique([requesterId, receiverId, connectionType])
   @@unique([requesterId, receiverPhone, connectionType])
@@ -153,6 +156,7 @@ model Order {
   orderNumber     String        @unique
   senderId        String
   receiverId      String
+  connectionId    String?
   status          String        @default("PENDING")
   isCash          Boolean       @default(false)
   currency        String        @default("YER")
@@ -173,9 +177,11 @@ model Order {
   items           OrderItem[]
   receiver        Business      @relation("OrderReceiver", fields: [receiverId], references: [id])
   sender          Business      @relation("OrderSender", fields: [senderId], references: [id])
+  connection      Connection?   @relation(fields: [connectionId], references: [id])
   transactions    Transaction[]
 
   @@index([status])
+  @@index([connectionId])
   @@index([createdAt], map: "orders_created_at_idx")
   @@map("orders")
 }
@@ -206,6 +212,7 @@ model Transaction {
   balanceAfter    Decimal?  @db.Decimal(15, 2)
   senderId        String
   receiverId      String
+  connectionId    String?
   orderId         String?
   note            String?
   paymentMethod   String?
@@ -214,7 +221,9 @@ model Transaction {
   order           Order?    @relation(fields: [orderId], references: [id])
   receiver        Business  @relation("TransactionReceiver", fields: [receiverId], references: [id])
   sender          Business  @relation("TransactionSender", fields: [senderId], references: [id])
+  connection      Connection? @relation(fields: [connectionId], references: [id])
 
+  @@index([connectionId])
   @@index([createdAt], map: "transactions_created_at_idx")
   @@map("transactions")
 }

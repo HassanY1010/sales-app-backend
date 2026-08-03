@@ -7,6 +7,11 @@ export class GetTransactionsDto extends PaginationDto {
   @IsOptional()
   relatedBusinessId?: string;
 
+  /** Filter by specific connection ID */
+  @IsString()
+  @IsOptional()
+  connectionId?: string;
+
   /** Filter by transaction type */
   @IsEnum(['PAYMENT', 'SALE', 'PURCHASE', 'ADJUSTMENT', 'all'])
   @IsOptional()

@@ -51,4 +51,8 @@ export class ManualAddConnectionDto {
   @IsBoolean()
   @IsOptional()
   showPrices?: boolean;
+
+  @IsEnum(['CUSTOMERS', 'SUPPLIERS'])
+  @IsOptional()
+  requestSource?: 'CUSTOMERS' | 'SUPPLIERS';
 }

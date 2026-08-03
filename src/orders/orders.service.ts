@@ -147,6 +147,7 @@ export class OrdersService {
           clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
           senderId,
           receiverId: actualReceiverBusinessId,
+          connectionId: connection.id,
           status: initialStatus,
           isCash,
           currency,

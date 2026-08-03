@@ -14,6 +14,10 @@ export class CreateConnectionDto {
   @IsEnum(['CUSTOMER', 'SUPPLIER'])
   connectionType: 'CUSTOMER' | 'SUPPLIER';
 
+  @IsEnum(['CUSTOMERS', 'SUPPLIERS'])
+  @IsOptional()
+  requestSource?: 'CUSTOMERS' | 'SUPPLIERS';
+
   @IsNumber()
   @Min(0)
   @IsOptional()
