@@ -339,6 +339,14 @@ export class ConnectionsService {
 
     // Accept connection and auto-create a financial Account with credit config if it doesn't exist
     return this.prisma.$transaction(async (prisma) => {
+      const currentConn = await prisma.connection.findUnique({
+        where: { id: connectionId },
+      });
+
+      if (currentConn?.status === 'ACCEPTED') {
+        throw new BadRequestException('هذا الطلب مقبول بالفعل');
+      }
+
       // Check if account already exists (from a previous Accepted state before blocking)
       const existingAccount = await prisma.account.findUnique({
         where: { connectionId },
@@ -452,7 +460,24 @@ export class ConnectionsService {
         },
       );
 
-      return this.normalizeConnection(updated, businessId);
+      const freshConnection = await prisma.connection.findUnique({
+        where: { id: connectionId },
+        include: {
+          account: true,
+          requester: { include: { user: true } },
+          receiver: { include: { user: true } },
+          customerLinks: {
+            where: { status: 'ACTIVE' },
+            include: { supplier: { include: { requester: true, receiver: true } } },
+          },
+          supplierLinks: {
+            where: { status: 'ACTIVE' },
+            include: { customer: { include: { requester: true, receiver: true } } },
+          },
+        },
+      });
+
+      return this.normalizeConnection(freshConnection, businessId);
     });
   }
 
@@ -1676,6 +1701,8 @@ export class ConnectionsService {
     }
     const requiresReceiverInput = dto.connectionType === 'SUPPLIER';
 
+    const requestSource = dto.requestSource || (dto.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+
     // Check if sender is trying to link themselves
     const senderBusiness = await this.prisma.business.findUnique({
       where: { id: businessId },
@@ -1744,92 +1771,101 @@ export class ConnectionsService {
         }
       }
 
-      return this.prisma.$transaction(async (tx) => {
-        let finalConnection: any;
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          let finalConnection: any;
 
-        if (existing && existing.status === 'REJECTED') {
-          finalConnection = await tx.connection.update({
-            where: { id: existing.id },
+          if (existing && existing.status === 'REJECTED') {
+            finalConnection = await tx.connection.update({
+              where: { id: existing.id },
+              data: {
+                status: 'PENDING',
+                requesterId: businessId,
+                receiverId: targetBusiness!.id,
+                connectionType: dto.connectionType,
+                requestSource,
+                retryCount: { increment: 1 },
+                isReadReceiver: false,
+                lastRequestedAt: new Date(),
+                requiresReceiverInput,
+                pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
+                pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
+              },
+              include: {
+                requester: true,
+                receiver: { include: { user: true } },
+              },
+            });
+          } else {
+            finalConnection = await tx.connection.create({
+              data: {
+                requesterId: businessId,
+                receiverId: targetBusiness!.id,
+                connectionType: dto.connectionType,
+                requestSource,
+                status: 'PENDING',
+                isReadReceiver: false,
+                lastRequestedAt: new Date(),
+                requiresReceiverInput,
+                pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
+                pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
+              },
+              include: {
+                requester: true,
+                receiver: { include: { user: true } },
+              },
+            });
+          }
+
+          await tx.auditLog.create({
             data: {
-              status: 'PENDING',
-              requesterId: businessId,
-              receiverId: targetBusiness!.id,
-              connectionType: dto.connectionType,
-              retryCount: { increment: 1 },
-              isReadReceiver: false,
-              lastRequestedAt: new Date(),
-              requiresReceiverInput,
-              pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
-              pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
-            },
-            include: {
-              requester: true,
-              receiver: { include: { user: true } },
+              userId,
+              businessId,
+              action: 'SEND_RELATIONSHIP_REQUEST',
+              resource: 'CONNECTION',
+              resourceId: finalConnection.id,
+              details: {
+                connectionType: dto.connectionType,
+                receiverPhone: normalizedPhone,
+                requiresReceiverInput,
+                registeredReceiver: true,
+              },
             },
           });
-        } else {
-          finalConnection = await tx.connection.create({
-            data: {
-              requesterId: businessId,
-              receiverId: targetBusiness!.id,
-              connectionType: dto.connectionType,
-              status: 'PENDING',
-              isReadReceiver: false,
-              lastRequestedAt: new Date(),
-              requiresReceiverInput,
-              pendingOpenBalance: requiresReceiverInput ? null : (dto.openingBalance ?? null),
-              pendingCreditLimit: requiresReceiverInput ? null : (dto.creditLimit ?? null),
-            },
-            include: {
-              requester: true,
-              receiver: { include: { user: true } },
-            },
+
+          // Notify registered receiver
+          const receiverUserId = (targetBusiness as any).user?.id;
+          if (receiverUserId) {
+            await this.notificationsService.sendPushNotification(
+              receiverUserId,
+              'طلب ارتباط جديد',
+              `يريد ${finalConnection.requester.name} الارتباط بحسابك كـ${dto.connectionType === 'CUSTOMER' ? 'مورد' : 'عميل'}.`,
+              {
+                type: 'connection_request',
+                notificationType: 'connection_request',
+                entityType: 'connection_request',
+                entityId: finalConnection.id,
+                requestId: finalConnection.id,
+                requiresInput: requiresReceiverInput ? 'true' : 'false',
+              },
+            );
+          }
+
+          this.eventsGateway.emitToBusiness(targetBusiness!.id, 'NEW_CONNECTION_REQUEST', {
+            id: finalConnection.id,
+            requesterName: finalConnection.requester.name,
+            connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
+            requiresInput: requiresReceiverInput,
           });
-        }
 
-        await tx.auditLog.create({
-          data: {
-            userId,
-            businessId,
-            action: 'SEND_RELATIONSHIP_REQUEST',
-            resource: 'CONNECTION',
-            resourceId: finalConnection.id,
-            details: {
-              connectionType: dto.connectionType,
-              receiverPhone: normalizedPhone,
-              requiresReceiverInput,
-              registeredReceiver: true,
-            },
-          },
+          return this.normalizeConnection(finalConnection, businessId);
         });
-
-        // Notify registered receiver
-        const receiverUserId = (targetBusiness as any).user?.id;
-        if (receiverUserId) {
-          await this.notificationsService.sendPushNotification(
-            receiverUserId,
-            'طلب ارتباط جديد',
-            `يريد ${finalConnection.requester.name} الارتباط بحسابك كـ${dto.connectionType === 'CUSTOMER' ? 'مورد' : 'عميل'}.`,
-            {
-              type: 'connection_request',
-              notificationType: 'connection_request',
-              entityType: 'connection_request',
-              entityId: finalConnection.id,
-              requestId: finalConnection.id,
-              requiresInput: requiresReceiverInput ? 'true' : 'false',
-            },
-          );
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new ConflictException('هناك طلب ارتباط قائم بالفعل لهذا الطرف');
         }
-
-        this.eventsGateway.emitToBusiness(targetBusiness!.id, 'NEW_CONNECTION_REQUEST', {
-          id: finalConnection.id,
-          requesterName: finalConnection.requester.name,
-          connectionType: dto.connectionType === 'SUPPLIER' ? 'CUSTOMER' : 'SUPPLIER',
-          requiresInput: requiresReceiverInput,
-        });
-
-        return this.normalizeConnection(finalConnection, businessId);
-      });
+        throw err;
+      }
     }
 
     // ── CASE 2: Receiver is NOT registered yet ────────────────────────────
@@ -1864,6 +1900,7 @@ export class ConnectionsService {
           receiverId: null,
           receiverPhone: normalizedPhone,
           connectionType: dto.connectionType,
+          requestSource,
           status: 'PENDING',
           isReadReceiver: false,
           lastRequestedAt: new Date(),

@@ -9,6 +9,7 @@ import { PrismaService } from '../database/prisma.service';
 import { FinanceService } from '../finance/finance.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
+import { InvoiceNumberService } from '../common/invoice-number.service';
 import { Decimal } from 'decimal.js';
 
 // ====================================================================
@@ -16,7 +17,8 @@ import { Decimal } from 'decimal.js';
 // ====================================================================
 const mockPrisma = {
   connection: { findFirst: jest.fn() },
-  business: { findUnique: jest.fn() },
+  customerSupplierLink: { findFirst: jest.fn() },
+  business: { findUnique: jest.fn(), findFirst: jest.fn() },
   order: {
     create: jest.fn(),
     findUnique: jest.fn(),
@@ -33,6 +35,7 @@ const mockPrisma = {
 const mockFinanceService = { recordFinancialMovement: jest.fn() };
 const mockNotificationsService = { sendPushNotification: jest.fn() };
 const mockEventsGateway = { emitToBusiness: jest.fn() };
+const mockInvoiceNumberService = { generateInvoiceNumber: jest.fn().mockResolvedValue('INV-1001') };
 
 // ====================================================================
 // Test Suite
@@ -48,6 +51,7 @@ describe('OrdersService', () => {
         { provide: FinanceService, useValue: mockFinanceService },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: EventsGateway, useValue: mockEventsGateway },
+        { provide: InvoiceNumberService, useValue: mockInvoiceNumberService },
       ],
     }).compile();
 
