@@ -25,7 +25,7 @@ import { Roles } from '../core/decorators/roles.decorator';
 
 @Controller('connections')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('business', 'individual') // Merchants and Consumers can both manage connections
+@Roles('business', 'individual', 'consumer') // Merchants and Consumers can both manage connections
 export class ConnectionsController {
   constructor(private readonly connectionsService: ConnectionsService) {}
 
@@ -231,7 +231,7 @@ export class ConnectionsController {
    * POST /connections/request-by-phone
    */
   @Post('request-by-phone')
-  @Roles('business')
+  @Roles('business', 'individual', 'consumer')
   async sendRelationshipRequestByPhone(
     @CurrentUser() user: any,
     @Body() dto: SendRelationshipRequestDto,
@@ -247,7 +247,7 @@ export class ConnectionsController {
   }
 
   @Post('manual-add')
-  @Roles('business')
+  @Roles('business', 'individual', 'consumer')
   async manualAdd(
     @CurrentUser() user: any,
     @Body() body: ManualAddConnectionDto,
@@ -259,7 +259,7 @@ export class ConnectionsController {
   }
 
   @Patch(':id/toggle-show-prices')
-  @Roles('business')
+  @Roles('business', 'individual', 'consumer')
   async toggleShowPrices(
     @CurrentUser() user: any,
     @Param('id') connectionId: string,

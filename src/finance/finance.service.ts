@@ -182,15 +182,23 @@ export class FinanceService {
       },
     });
 
-    // 4. Update totalCredit and totalDebit based on the NEW balance
-    // This maintains the "Snapshot" for easy UI reading
+    // 4. Update totalCredit and totalDebit based on the NEW balance and Connection Perspective
     const newBalance = new Decimal(updatedAccount.balance?.toString() ?? '0');
-    const newTotalCredit = newBalance.greaterThan(0)
-      ? newBalance
-      : new Decimal(0);
-    const newTotalDebit = newBalance.lessThan(0)
-      ? newBalance.abs()
-      : new Decimal(0);
+    const isCustomer = connection.connectionType === 'CUSTOMER';
+    const numBalance = newBalance.toNumber();
+
+    let newTotalCredit = new Decimal(0);
+    let newTotalDebit = new Decimal(0);
+
+    if (isCustomer) {
+      // Customer: balance > 0 = عليه (totalDebit), balance < 0 = له (totalCredit)
+      if (numBalance > 0) newTotalDebit = newBalance;
+      if (numBalance < 0) newTotalCredit = newBalance.abs();
+    } else {
+      // Supplier: balance > 0 = له (totalCredit), balance < 0 = عليه (totalDebit)
+      if (numBalance > 0) newTotalCredit = newBalance;
+      if (numBalance < 0) newTotalDebit = newBalance.abs();
+    }
 
     await tx.account.update({
       where: { id: updatedAccount.id },
@@ -227,6 +235,7 @@ export class FinanceService {
         action: 'CREATE',
         resource: 'TRANSACTION',
         resourceId: transaction.id,
+        businessId: senderId,
         userId: userId,
         details: {
           type,
@@ -314,18 +323,24 @@ export class FinanceService {
         body = `تم تسجيل فاتورة بقيمة ${amountStr} من ${sender?.name}.`;
         break;
       case 'ADJUSTMENT':
-        title = 'تعديل رصيد';
-        body = `قام ${sender?.name} بتعديل الرصيد بقيمة ${amountStr}.`;
+        const isOpening = note?.includes('افتتاحي') ?? false;
+        title = isOpening ? 'رصيد افتتاحي' : 'تعديل رصيد';
+        body = isOpening
+          ? `تم تحديد رصيد افتتاحي بقيمة ${amountStr} لصالح ${sender?.name}.`
+          : `قام ${sender?.name} بتعديل الرصيد بقيمة ${amountStr}.`;
         break;
     }
 
     if (title) {
+      const notificationType = type === 'ADJUSTMENT' ? 'OPENING_BALANCE' : (orderId ? 'order' : 'receipt_voucher');
       await this.notificationsService.sendPushNotification(
         receiver.user.id,
         title,
         body,
         {
-          type: orderId ? 'order' : 'receipt_voucher',
+          type: notificationType,
+          notificationType: notificationType,
+          entityType: type === 'ADJUSTMENT' ? 'opening_balance' : (orderId ? 'order' : 'invoice'),
           amount: amountStr,
           transactionType: type,
           recordId: orderId || transactionId,

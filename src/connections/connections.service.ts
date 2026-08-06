@@ -564,17 +564,21 @@ export class ConnectionsService {
       const upperType = type.toUpperCase();
       if (upperType === 'CUSTOMER') {
         // Customer for businessId:
-        // Requester created CUSTOMER request, OR Receiver received SUPPLIER request
+        // Requester created CUSTOMER request (or requestSource CUSTOMERS), OR Receiver received SUPPLIER request (or requestSource SUPPLIERS)
         where.OR = [
           { requesterId: businessId, connectionType: 'CUSTOMER' },
+          { requesterId: businessId, requestSource: 'CUSTOMERS' },
           { receiverId: businessId, connectionType: 'SUPPLIER' },
+          { receiverId: businessId, requestSource: 'SUPPLIERS' },
         ];
       } else if (upperType === 'SUPPLIER') {
         // Supplier for businessId:
-        // Requester created SUPPLIER request, OR Receiver received CUSTOMER request
+        // Requester created SUPPLIER request (or requestSource SUPPLIERS), OR Receiver received CUSTOMER request (or requestSource CUSTOMERS)
         where.OR = [
           { requesterId: businessId, connectionType: 'SUPPLIER' },
+          { requesterId: businessId, requestSource: 'SUPPLIERS' },
           { receiverId: businessId, connectionType: 'CUSTOMER' },
+          { receiverId: businessId, requestSource: 'CUSTOMERS' },
         ];
       } else {
         where.OR = [{ requesterId: businessId }, { receiverId: businessId }];
