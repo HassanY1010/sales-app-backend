@@ -123,13 +123,27 @@ export class ReportsService {
 
     connections.forEach((c) => {
       const isRequester = c.requesterId === businessId;
-      const balance = new Decimal((c.account?.balance as any) || 0);
-      if (isRequester) {
-        if (balance.greaterThan(0)) receivable = receivable.plus(balance);
-        else payable = payable.plus(balance.abs());
+      const dbBalance = new Decimal((c.account?.balance as any) || 0);
+      const userBalance = isRequester ? dbBalance : dbBalance.negated();
+      const requestSource = c.requestSource || (c.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+      const actualType = isRequester
+        ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+        : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
+
+      if (actualType === 'CUSTOMER') {
+        // Customer: balance > 0 = عليه (Receivable), balance < 0 = له (Payable)
+        if (userBalance.greaterThan(0)) {
+          receivable = receivable.plus(userBalance);
+        } else if (userBalance.lessThan(0)) {
+          payable = payable.plus(userBalance.abs());
+        }
       } else {
-        if (balance.lessThan(0)) receivable = receivable.plus(balance.abs());
-        else payable = payable.plus(balance);
+        // Supplier: balance > 0 = له (Payable), balance < 0 = عليه (Receivable)
+        if (userBalance.greaterThan(0)) {
+          payable = payable.plus(userBalance);
+        } else if (userBalance.lessThan(0)) {
+          receivable = receivable.plus(userBalance.abs());
+        }
       }
     });
 

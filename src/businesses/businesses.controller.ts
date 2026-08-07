@@ -16,10 +16,7 @@ export class BusinessesController {
 
   @Get('search')
   search(@CurrentUser() user: any, @Query('query') query: string) {
-    if (!user.businessId) {
-      throw new ForbiddenException('User does not have an associated business');
-    }
-
-    return this.businessesService.search(user.businessId, query);
+    const callerId = user.businessId || user.id;
+    return this.businessesService.search(callerId, query);
   }
 }

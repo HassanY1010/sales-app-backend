@@ -236,11 +236,9 @@ export class ConnectionsController {
     @CurrentUser() user: any,
     @Body() dto: SendRelationshipRequestDto,
   ) {
-    if (!user.businessId) {
-      throw new ForbiddenException('User does not have an associated business');
-    }
+    const callerId = user.businessId || user.id;
     return this.connectionsService.sendRelationshipRequestByPhone(
-      user.businessId,
+      callerId,
       user.id,
       dto,
     );
@@ -252,10 +250,8 @@ export class ConnectionsController {
     @CurrentUser() user: any,
     @Body() body: ManualAddConnectionDto,
   ) {
-    if (!user.businessId) {
-      throw new ForbiddenException('User does not have an associated business');
-    }
-    return this.connectionsService.manualAddConnection(user.businessId, body);
+    const callerId = user.businessId || user.id;
+    return this.connectionsService.manualAddConnection(callerId, body);
   }
 
   @Patch(':id/toggle-show-prices')
