@@ -558,56 +558,76 @@ export class ConnectionsService {
     type?: string,
   ) {
     const { page = 1, limit = 10 } = pagination;
-    const where: any = {};
 
-    if (type) {
-      const upperType = type.toUpperCase();
-      if (upperType === 'CUSTOMER') {
-        // Customer for businessId:
-        // Requester created CUSTOMER request (or requestSource CUSTOMERS), OR Receiver received SUPPLIER request (or requestSource SUPPLIERS)
-        where.OR = [
-          { requesterId: businessId, connectionType: 'CUSTOMER' },
-          { requesterId: businessId, requestSource: 'CUSTOMERS' },
-          { receiverId: businessId, connectionType: 'SUPPLIER' },
-          { receiverId: businessId, requestSource: 'SUPPLIERS' },
-        ];
-      } else if (upperType === 'SUPPLIER') {
-        // Supplier for businessId:
-        // Requester created SUPPLIER request (or requestSource SUPPLIERS), OR Receiver received CUSTOMER request (or requestSource CUSTOMERS)
-        where.OR = [
-          { requesterId: businessId, connectionType: 'SUPPLIER' },
-          { requesterId: businessId, requestSource: 'SUPPLIERS' },
-          { receiverId: businessId, connectionType: 'CUSTOMER' },
-          { receiverId: businessId, requestSource: 'CUSTOMERS' },
-        ];
-      } else {
-        where.OR = [{ requesterId: businessId }, { receiverId: businessId }];
-      }
+    // Build the ownership/role filter
+    let ownershipFilter: any;
+    const upperType = type?.toUpperCase();
+
+    if (upperType === 'CUSTOMER') {
+      // I am the requester who created a CUSTOMER/CUSTOMERS request,
+      // OR I am the receiver of a SUPPLIER/SUPPLIERS request (they treat me as their customer).
+      ownershipFilter = {
+        AND: [
+          {
+            status: { in: ['ACCEPTED', 'ACTIVE'] },
+          },
+          {
+            OR: [
+              { requesterId: businessId, connectionType: 'CUSTOMER' },
+              { requesterId: businessId, requestSource: 'CUSTOMERS' },
+              { receiverId: businessId, connectionType: 'SUPPLIER' },
+              { receiverId: businessId, requestSource: 'SUPPLIERS' },
+            ],
+          },
+        ],
+      };
+    } else if (upperType === 'SUPPLIER') {
+      // I am the requester who created a SUPPLIER/SUPPLIERS request,
+      // OR I am the receiver of a CUSTOMER/CUSTOMERS request (they treat me as their supplier).
+      ownershipFilter = {
+        AND: [
+          {
+            status: { in: ['ACCEPTED', 'ACTIVE'] },
+          },
+          {
+            OR: [
+              { requesterId: businessId, connectionType: 'SUPPLIER' },
+              { requesterId: businessId, requestSource: 'SUPPLIERS' },
+              { receiverId: businessId, connectionType: 'CUSTOMER' },
+              { receiverId: businessId, requestSource: 'CUSTOMERS' },
+            ],
+          },
+        ],
+      };
     } else {
-      where.OR = [{ requesterId: businessId }, { receiverId: businessId }];
+      // 'all' or no type: used by pendingConnections — no status filter, show everything
+      ownershipFilter = {
+        OR: [{ requesterId: businessId }, { receiverId: businessId }],
+      };
     }
 
+    // Combine ownership filter with optional search
+    let where: any;
     if (search) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(search.trim());
-      where.AND = [
-        {
-          OR: [
-            ...(isUuid ? [
-              { id: { equals: search.trim() } },
-              { requesterId: { equals: search.trim() } },
-              { receiverId: { equals: search.trim() } },
-            ] : []),
-            { requester: { name: { contains: search, mode: 'insensitive' } } },
-            { receiver: { name: { contains: search, mode: 'insensitive' } } },
-            { requester: { phoneNumber: { contains: search } } },
-            { receiver: { phoneNumber: { contains: search } } },
-            { requester: { user: { phone: { contains: search } } } },
-            { receiver: { user: { phone: { contains: search } } } },
-            { requester: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
-            { receiver: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
-          ],
-        },
-      ];
+      const searchFilter = {
+        OR: [
+          ...(isUuid ? [
+            { id: { equals: search.trim() } },
+            { requesterId: { equals: search.trim() } },
+            { receiverId: { equals: search.trim() } },
+          ] : []),
+          { requester: { name: { contains: search, mode: 'insensitive' } } },
+          { receiver: { name: { contains: search, mode: 'insensitive' } } },
+          { requester: { phoneNumber: { contains: search } } },
+          { receiver: { phoneNumber: { contains: search } } },
+          { requester: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
+          { receiver: { user: { fullName: { contains: search, mode: 'insensitive' } } } },
+        ],
+      };
+      where = { AND: [ownershipFilter, searchFilter] };
+    } else {
+      where = ownershipFilter;
     }
 
     const [data, total] = await Promise.all([
