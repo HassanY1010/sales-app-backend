@@ -17,6 +17,7 @@ import {
 import { ManualAddConnectionDto } from './dto/manual-add-connection.dto';
 import { LinkConnectionsDto } from './dto/link-connections.dto';
 import { SendRelationshipRequestDto } from './dto/send-relationship-request.dto';
+import { GetConnectionsDto } from './dto/get-connections.dto';
 import { JwtAuthGuard } from '../core/guards/jwt-auth.guard';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { CurrentUser } from '../core/decorators/current-user.decorator';
@@ -182,18 +183,16 @@ export class ConnectionsController {
   @Get()
   async getConnections(
     @CurrentUser() user: any,
-    @Query() pagination: PaginationDto,
-    @Query('search') search?: string,
-    @Query('type') type?: string,
+    @Query() query: GetConnectionsDto,
   ) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
     return this.connectionsService.getConnections(
       user.businessId,
-      pagination,
-      search,
-      type,
+      query,
+      query.search,
+      query.type,
     );
   }
 
