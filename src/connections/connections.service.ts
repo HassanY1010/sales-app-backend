@@ -56,7 +56,10 @@ export class ConnectionsService {
     if (!connection) return null;
     const plainConnection = JSON.parse(JSON.stringify(connection));
     const isRequester = plainConnection.requesterId === businessId;
-    const requestSource = plainConnection.requestSource || (plainConnection.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+    const rawConnType = (plainConnection.connectionType || '').toUpperCase();
+    const rawReqSource = (plainConnection.requestSource || '').toUpperCase();
+
+    const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
     const effectiveType = isRequester
       ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
       : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
@@ -105,10 +108,10 @@ export class ConnectionsService {
       let linkedConnectionId: string | null = null;
       
       const activeCustomerLink = plainConnection.customerLinks?.find(
-        (l: any) => l.status === 'ACTIVE',
+        (l: any) => l.status === 'ACTIVE' || l.status === 'active',
       );
       const activeSupplierLink = plainConnection.supplierLinks?.find(
-        (l: any) => l.status === 'ACTIVE',
+        (l: any) => l.status === 'ACTIVE' || l.status === 'active',
       );
 
       if (activeCustomerLink && activeCustomerLink.supplier) {
@@ -569,14 +572,14 @@ export class ConnectionsService {
       ownershipFilter = {
         AND: [
           {
-            status: { in: ['ACCEPTED', 'ACTIVE'] },
+            status: { in: ['ACCEPTED', 'accepted', 'ACTIVE', 'active'] },
           },
           {
             OR: [
-              { requesterId: businessId, connectionType: 'CUSTOMER' },
-              { requesterId: businessId, requestSource: 'CUSTOMERS' },
-              { receiverId: businessId, connectionType: 'SUPPLIER' },
-              { receiverId: businessId, requestSource: 'SUPPLIERS' },
+              { requesterId: businessId, connectionType: { in: ['CUSTOMER', 'customer'] } },
+              { requesterId: businessId, requestSource: { in: ['CUSTOMERS', 'customers'] } },
+              { receiverId: businessId, connectionType: { in: ['SUPPLIER', 'supplier'] } },
+              { receiverId: businessId, requestSource: { in: ['SUPPLIERS', 'suppliers'] } },
             ],
           },
         ],
@@ -587,14 +590,14 @@ export class ConnectionsService {
       ownershipFilter = {
         AND: [
           {
-            status: { in: ['ACCEPTED', 'ACTIVE'] },
+            status: { in: ['ACCEPTED', 'accepted', 'ACTIVE', 'active'] },
           },
           {
             OR: [
-              { requesterId: businessId, connectionType: 'SUPPLIER' },
-              { requesterId: businessId, requestSource: 'SUPPLIERS' },
-              { receiverId: businessId, connectionType: 'CUSTOMER' },
-              { receiverId: businessId, requestSource: 'CUSTOMERS' },
+              { requesterId: businessId, connectionType: { in: ['SUPPLIER', 'supplier'] } },
+              { requesterId: businessId, requestSource: { in: ['SUPPLIERS', 'suppliers'] } },
+              { receiverId: businessId, connectionType: { in: ['CUSTOMER', 'customer'] } },
+              { receiverId: businessId, requestSource: { in: ['CUSTOMERS', 'customers'] } },
             ],
           },
         ],
