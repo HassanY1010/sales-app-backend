@@ -121,16 +121,23 @@ export class ReportsService {
       }
     });
 
+    let customersCount = 0;
+    let suppliersCount = 0;
+
     connections.forEach((c) => {
       const isRequester = c.requesterId === businessId;
       const dbBalance = new Decimal((c.account?.balance as any) || 0);
       const userBalance = isRequester ? dbBalance : dbBalance.negated();
-      const requestSource = c.requestSource || (c.connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+      const rawConnType = (c.connectionType || '').toUpperCase();
+      const rawReqSource = (c.requestSource || '').toUpperCase();
+      const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+
       const actualType = isRequester
         ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
         : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
 
       if (actualType === 'CUSTOMER') {
+        customersCount++;
         // Customer: balance > 0 = عليه (Receivable), balance < 0 = له (Payable)
         if (userBalance.greaterThan(0)) {
           receivable = receivable.plus(userBalance);
@@ -138,6 +145,7 @@ export class ReportsService {
           payable = payable.plus(userBalance.abs());
         }
       } else {
+        suppliersCount++;
         // Supplier: balance > 0 = له (Payable), balance < 0 = عليه (Receivable)
         if (userBalance.greaterThan(0)) {
           payable = payable.plus(userBalance);
@@ -154,24 +162,8 @@ export class ReportsService {
       payable: payable.toString(),
       ordersCount: orders.length,
       pendingOrdersCount: orders.filter((o) => o.status === 'PENDING').length,
-      customersCount: connections.filter((c) => {
-        const isRequester = c.requesterId === businessId;
-        const actualType = isRequester
-          ? c.connectionType
-          : c.connectionType === 'CUSTOMER'
-          ? 'SUPPLIER'
-          : 'CUSTOMER';
-        return actualType === 'CUSTOMER';
-      }).length,
-      suppliersCount: connections.filter((c) => {
-        const isRequester = c.requesterId === businessId;
-        const actualType = isRequester
-          ? c.connectionType
-          : c.connectionType === 'CUSTOMER'
-          ? 'SUPPLIER'
-          : 'CUSTOMER';
-        return actualType === 'SUPPLIER';
-      }).length,
+      customersCount,
+      suppliersCount,
       period: this.describePeriod(query, dateRange),
     };
   }

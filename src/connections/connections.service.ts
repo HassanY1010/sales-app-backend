@@ -560,52 +560,25 @@ export class ConnectionsService {
     search?: string,
     type?: string,
   ) {
-    const { page = 1, limit = 10 } = pagination;
-
-    // Build the ownership/role filter
-    let ownershipFilter: any;
+    const { page = 1, limit = 200 } = pagination;
     const upperType = type?.toUpperCase();
 
-    if (upperType === 'CUSTOMER') {
-      // I am the requester who created a CUSTOMER/CUSTOMERS request,
-      // OR I am the receiver of a SUPPLIER/SUPPLIERS request (they treat me as their customer).
+    // Base ownership filter: user must be requester or receiver
+    let ownershipFilter: any = {
+      OR: [{ requesterId: businessId }, { receiverId: businessId }],
+    };
+
+    // For CUSTOMER and SUPPLIER lists, only return accepted/active connections
+    if (upperType === 'CUSTOMER' || upperType === 'SUPPLIER') {
       ownershipFilter = {
         AND: [
           {
             status: { in: ['ACCEPTED', 'accepted', 'ACTIVE', 'active'] },
           },
           {
-            OR: [
-              { requesterId: businessId, connectionType: { in: ['CUSTOMER', 'customer'] } },
-              { requesterId: businessId, requestSource: { in: ['CUSTOMERS', 'customers'] } },
-              { receiverId: businessId, connectionType: { in: ['SUPPLIER', 'supplier'] } },
-              { receiverId: businessId, requestSource: { in: ['SUPPLIERS', 'suppliers'] } },
-            ],
+            OR: [{ requesterId: businessId }, { receiverId: businessId }],
           },
         ],
-      };
-    } else if (upperType === 'SUPPLIER') {
-      // I am the requester who created a SUPPLIER/SUPPLIERS request,
-      // OR I am the receiver of a CUSTOMER/CUSTOMERS request (they treat me as their supplier).
-      ownershipFilter = {
-        AND: [
-          {
-            status: { in: ['ACCEPTED', 'accepted', 'ACTIVE', 'active'] },
-          },
-          {
-            OR: [
-              { requesterId: businessId, connectionType: { in: ['SUPPLIER', 'supplier'] } },
-              { requesterId: businessId, requestSource: { in: ['SUPPLIERS', 'suppliers'] } },
-              { receiverId: businessId, connectionType: { in: ['CUSTOMER', 'customer'] } },
-              { receiverId: businessId, requestSource: { in: ['CUSTOMERS', 'customers'] } },
-            ],
-          },
-        ],
-      };
-    } else {
-      // 'all' or no type: used by pendingConnections — no status filter, show everything
-      ownershipFilter = {
-        OR: [{ requesterId: businessId }, { receiverId: businessId }],
       };
     }
 
@@ -633,61 +606,68 @@ export class ConnectionsService {
       where = ownershipFilter;
     }
 
-    const [data, total] = await Promise.all([
-      this.prisma.connection.findMany({
-        where,
-        include: {
-          requester: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  fullName: true,
-                  userType: true,
-                  isActive: true,
-                },
+    const data = await this.prisma.connection.findMany({
+      where,
+      include: {
+        requester: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                userType: true,
+                isActive: true,
               },
             },
-          },
-          receiver: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  fullName: true,
-                  userType: true,
-                  isActive: true,
-                },
-              },
-            },
-          },
-          account: true,
-          customerLinks: {
-            where: { status: 'ACTIVE' },
-            include: { supplier: { include: { requester: true, receiver: true } } },
-          },
-          supplierLinks: {
-            where: { status: 'ACTIVE' },
-            include: { customer: { include: { requester: true, receiver: true } } },
           },
         },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.connection.count({ where }),
-    ]);
+        receiver: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                userType: true,
+                isActive: true,
+              },
+            },
+          },
+        },
+        account: true,
+        customerLinks: {
+          where: { status: 'ACTIVE' },
+          include: { supplier: { include: { requester: true, receiver: true } } },
+        },
+        supplierLinks: {
+          where: { status: 'ACTIVE' },
+          include: { customer: { include: { requester: true, receiver: true } } },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    const normalizedData = data.map((connection) =>
-      this.normalizeConnection(connection, businessId),
-    );
+    // 1. Normalize all connections using SSOT normalizeConnection
+    const normalizedData = data
+      .map((connection) => this.normalizeConnection(connection, businessId))
+      .filter((conn) => conn != null);
+
+    // 2. Filter by CUSTOMER / SUPPLIER role after normalization
+    let filteredList = normalizedData;
+    if (upperType === 'CUSTOMER') {
+      filteredList = normalizedData.filter((c) => c.connectionType === 'CUSTOMER');
+    } else if (upperType === 'SUPPLIER') {
+      filteredList = normalizedData.filter((c) => c.connectionType === 'SUPPLIER');
+    }
+
+    const total = filteredList.length;
+    const paginatedList = filteredList.slice((page - 1) * limit, page * limit);
 
     return {
-      data: normalizedData,
+      data: paginatedList,
       meta: {
         total,
         page,
-        lastPage: Math.ceil(total / limit),
+        lastPage: Math.ceil(total / limit) || 1,
         limit,
       },
     };
