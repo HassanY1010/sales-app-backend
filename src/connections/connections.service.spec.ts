@@ -1,10 +1,10 @@
-﻿import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ConnectionsService } from './connections.service';
 
 describe('ConnectionsService - Relationship Requests & Edge Cases', () => {
   function createService() {
-    const prisma = {
-      $transaction: jest.fn((cb) => cb(prisma)),
+    const prisma: any = {
+      $transaction: jest.fn((cb: any) => cb(prisma)),
       business: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),

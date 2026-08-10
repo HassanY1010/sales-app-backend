@@ -286,8 +286,8 @@ describe('OrdersService', () => {
         'business',
       );
 
-      expect(result.status).toBe('REJECTED');
-      expect(result.rejectionReason).toBe('Credit Limit Exceeded');
+      expect(result?.status).toBe('REJECTED');
+      expect(result?.rejectionReason).toBe('Credit Limit Exceeded');
     });
   });
 

@@ -878,6 +878,20 @@ export class ConnectionsService {
     const accountCreditLimit = Number(creditLimit ?? 100000);
 
     const requestSource = dto.requestSource || (connectionType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+    const isCustomer = connectionType === 'CUSTOMER';
+    let totalCredit = 0;
+    let totalDebit = 0;
+
+    if (isCustomer) {
+      // Customer: balance > 0 = عليه (totalDebit), balance < 0 = له (totalCredit)
+      if (initialBalance > 0) totalDebit = initialBalance;
+      if (initialBalance < 0) totalCredit = Math.abs(initialBalance);
+    } else {
+      // Supplier: balance > 0 = له (totalCredit), balance < 0 = عليه (totalDebit)
+      if (initialBalance > 0) totalCredit = initialBalance;
+      if (initialBalance < 0) totalDebit = Math.abs(initialBalance);
+    }
+
     const created = await this.prisma.connection.create({
       data: {
         requesterId: myBusinessId,
@@ -889,8 +903,8 @@ export class ConnectionsService {
         account: {
           create: {
             balance: initialBalance,
-            totalCredit: initialBalance > 0 ? initialBalance : 0,
-            totalDebit: initialBalance < 0 ? Math.abs(initialBalance) : 0,
+            totalCredit,
+            totalDebit,
             creditLimit: accountCreditLimit,
             billingCycle,
             dueDate: dueDate ? new Date(dueDate) : undefined,
@@ -900,26 +914,36 @@ export class ConnectionsService {
       include: {
         requester: true,
         receiver: true,
+        account: true,
       },
     });
 
     if (initialBalance !== 0) {
-      const senderId = initialBalance > 0 ? created.requesterId : created.receiverId!;
-      const receiverId = initialBalance > 0 ? created.receiverId! : created.requesterId;
-      const amount = Math.abs(initialBalance);
-
       await this.prisma.transaction.create({
         data: {
           transactionType: 'ADJUSTMENT',
-          amount,
-          senderId,
-          receiverId,
+          amount: Math.abs(initialBalance),
+          senderId: myBusinessId,
+          receiverId: targetBusiness.id,
           note: `رصيد افتتاحي: ${initialBalance}`,
         },
       });
+
+      if (created.account?.id) {
+        await this.financeService.rebuildAccountBalance(created.account.id);
+      }
     }
 
-    return this.normalizeConnection(created, myBusinessId);
+    const freshConnection = await this.prisma.connection.findUnique({
+      where: { id: created.id },
+      include: {
+        requester: true,
+        receiver: true,
+        account: true,
+      },
+    });
+
+    return this.normalizeConnection(freshConnection, myBusinessId);
   }
 
   async updateAccountTerms(

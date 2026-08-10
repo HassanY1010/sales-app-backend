@@ -47,7 +47,7 @@ describe('AuthService', () => {
 
     return {
       prisma,
-      service: new AuthService(prisma as any, jwtService as any, config as any),
+      service: new AuthService(prisma as any, jwtService as any, config as any, {} as any),
     };
   }
 
@@ -79,7 +79,7 @@ describe('AuthService', () => {
     });
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBeTruthy();
-    expect(result.user.password).toBeUndefined();
+    expect((result.user as any).password).toBeUndefined();
     expect(prisma.refreshToken.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: 'user-1',
