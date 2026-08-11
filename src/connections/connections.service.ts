@@ -67,9 +67,8 @@ export class ConnectionsService {
     let account = plainConnection.account;
     if (account) {
       const dbBalance = new Decimal(account.balance as any || 0);
-      const normalizedBalance = isRequester ? dbBalance : dbBalance.negated();
+      const numBalance = dbBalance.toNumber();
       const isCustomer = effectiveType === 'CUSTOMER';
-      const numBalance = normalizedBalance.toNumber();
 
       let totalDebit = 0;
       let totalCredit = 0;

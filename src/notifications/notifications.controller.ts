@@ -204,12 +204,21 @@ export class NotificationsController {
     for (const connection of connections) {
       const isRequester = connection.requesterId === user.businessId;
       const dbBalance = Number(connection.account?.balance ?? 0);
-      const normalizedBalance = isRequester ? dbBalance : -dbBalance;
+      const rawConnType = (connection.connectionType || '').toUpperCase();
+      const rawReqSource = (connection.requestSource || '').toUpperCase();
+      const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
 
-      if (normalizedBalance <= 0) {
+      const actualType = isRequester
+        ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+        : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
+
+      // Debtor alert applies when the party is a Customer and has positive balance (عليه)
+      const isDebtor = actualType === 'CUSTOMER' ? dbBalance > 0 : dbBalance < 0;
+
+      if (!isDebtor) {
         skipped.push({
           connectionId: connection.id,
-          reason: 'لا يوجد رصيد مدين على هذا العميل',
+          reason: 'لا يوجد رصيد مدين على هذا الحساب',
         });
         continue;
       }
@@ -228,7 +237,7 @@ export class NotificationsController {
           type: 'DEBTOR_ALERT',
           connectionId: connection.id,
           senderBusinessId: user.businessId,
-          balance: normalizedBalance.toString(),
+          balance: dbBalance.toString(),
         },
       );
 

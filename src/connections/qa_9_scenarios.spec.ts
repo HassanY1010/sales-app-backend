@@ -241,10 +241,10 @@ describe('QA Engineer - 9 Critical Scenarios Verification Suite', () => {
     expect(senderView.account.balance).toBe(1000);
     expect(senderView.account.creditLimit).toBe(5000);
 
-    // Check values from Receiver B perspective (Supplier: balance = -1000)
+    // Check values from Receiver B perspective (Supplier: balance = 1000 -> له 1000 🟢 / عليك ديون 1000 🔴)
     const receiverView = await service.getConnectionRequestDetails(bizMainB, 'usr-b', request.id);
     expect(receiverView.connectionType).toBe('SUPPLIER');
-    expect(receiverView.account.balance).toBe(-1000);
+    expect(receiverView.account.balance).toBe(1000);
   });
 
   // ── TEST 2: Unregistered Customer (عميل غير مسجل ثم تسجيله لاحقاً) ──────────

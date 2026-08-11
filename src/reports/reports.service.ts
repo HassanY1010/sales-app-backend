@@ -7,7 +7,7 @@ export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getDebtsToMe(businessId: string, query: any = {}) {
-    // Other businesses owe me money
+    // Other businesses owe me money: Customer (balance > 0) OR Supplier (balance < 0)
     const partyFilter = query.partyId
       ? {
           OR: [{ requesterId: query.partyId }, { receiverId: query.partyId }],
@@ -18,10 +18,7 @@ export class ReportsService {
       where: {
         ...partyFilter,
         status: 'ACCEPTED',
-        OR: [
-          { requesterId: businessId, account: { balance: { gt: 0 } } },
-          { receiverId: businessId, account: { balance: { lt: 0 } } },
-        ],
+        OR: [{ requesterId: businessId }, { receiverId: businessId }],
       },
       include: {
         requester: true,
@@ -31,24 +28,35 @@ export class ReportsService {
     });
 
     return connections
-      .filter((conn) => conn.receiver && conn.requester)
+      .filter((conn) => conn.receiver && conn.requester && conn.account)
+      .filter((conn) => {
+        const isRequester = conn.requesterId === businessId;
+        const rawConnType = (conn.connectionType || '').toUpperCase();
+        const rawReqSource = (conn.requestSource || '').toUpperCase();
+        const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+
+        const actualType = isRequester
+          ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+          : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
+
+        const balance = new Decimal(conn.account!.balance as any || 0);
+        return actualType === 'CUSTOMER' ? balance.greaterThan(0) : balance.lessThan(0);
+      })
       .map((conn) => {
         const isRequester = conn.requesterId === businessId;
         const otherBusiness = isRequester ? conn.receiver! : conn.requester;
-        const amountOwedToMe = isRequester
-          ? conn.account!.balance.toString()
-          : new Decimal(conn.account!.balance as any).abs().toString();
+        const balance = new Decimal(conn.account!.balance as any || 0);
 
         return {
           businessId: otherBusiness.id,
           businessName: otherBusiness.name,
-          amount: amountOwedToMe,
+          amount: balance.abs().toString(),
         };
       });
   }
 
   async getMyDebts(businessId: string, query: any = {}) {
-    // I owe money to other businesses
+    // I owe money to other businesses: Supplier (balance > 0) OR Customer (balance < 0)
     const partyFilter = query.partyId
       ? {
           OR: [{ requesterId: query.partyId }, { receiverId: query.partyId }],
@@ -59,10 +67,7 @@ export class ReportsService {
       where: {
         ...partyFilter,
         status: 'ACCEPTED',
-        OR: [
-          { requesterId: businessId, account: { balance: { lt: 0 } } },
-          { receiverId: businessId, account: { balance: { gt: 0 } } },
-        ],
+        OR: [{ requesterId: businessId }, { receiverId: businessId }],
       },
       include: {
         requester: true,
@@ -72,18 +77,29 @@ export class ReportsService {
     });
 
     return connections
-      .filter((conn) => conn.receiver && conn.requester)
+      .filter((conn) => conn.receiver && conn.requester && conn.account)
+      .filter((conn) => {
+        const isRequester = conn.requesterId === businessId;
+        const rawConnType = (conn.connectionType || '').toUpperCase();
+        const rawReqSource = (conn.requestSource || '').toUpperCase();
+        const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+
+        const actualType = isRequester
+          ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+          : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
+
+        const balance = new Decimal(conn.account!.balance as any || 0);
+        return actualType === 'SUPPLIER' ? balance.greaterThan(0) : balance.lessThan(0);
+      })
       .map((conn) => {
         const isRequester = conn.requesterId === businessId;
         const otherBusiness = isRequester ? conn.receiver! : conn.requester;
-        const amountIOwe = isRequester
-          ? new Decimal(conn.account!.balance as any).abs().toString()
-          : conn.account!.balance.toString();
+        const balance = new Decimal(conn.account!.balance as any || 0);
 
         return {
           businessId: otherBusiness.id,
           businessName: otherBusiness.name,
-          amount: amountIOwe,
+          amount: balance.abs().toString(),
         };
       });
   }
@@ -127,7 +143,6 @@ export class ReportsService {
     connections.forEach((c) => {
       const isRequester = c.requesterId === businessId;
       const dbBalance = new Decimal((c.account?.balance as any) || 0);
-      const userBalance = isRequester ? dbBalance : dbBalance.negated();
       const rawConnType = (c.connectionType || '').toUpperCase();
       const rawReqSource = (c.requestSource || '').toUpperCase();
       const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
@@ -139,18 +154,18 @@ export class ReportsService {
       if (actualType === 'CUSTOMER') {
         customersCount++;
         // Customer: balance > 0 = عليه (Receivable), balance < 0 = له (Payable)
-        if (userBalance.greaterThan(0)) {
-          receivable = receivable.plus(userBalance);
-        } else if (userBalance.lessThan(0)) {
-          payable = payable.plus(userBalance.abs());
+        if (dbBalance.greaterThan(0)) {
+          receivable = receivable.plus(dbBalance);
+        } else if (dbBalance.lessThan(0)) {
+          payable = payable.plus(dbBalance.abs());
         }
       } else {
         suppliersCount++;
         // Supplier: balance > 0 = له (Payable), balance < 0 = عليه (Receivable)
-        if (userBalance.greaterThan(0)) {
-          payable = payable.plus(userBalance);
-        } else if (userBalance.lessThan(0)) {
-          receivable = receivable.plus(userBalance.abs());
+        if (dbBalance.greaterThan(0)) {
+          payable = payable.plus(dbBalance);
+        } else if (dbBalance.lessThan(0)) {
+          receivable = receivable.plus(dbBalance.abs());
         }
       }
     });
@@ -352,11 +367,23 @@ export class ReportsService {
       .filter((conn) => conn.receiver && conn.requester)
       .map((connection) => {
         const isRequester = connection.requesterId === businessId;
+        const rawConnType = (connection.connectionType || '').toUpperCase();
+        const rawReqSource = (connection.requestSource || '').toUpperCase();
+        const requestSource = rawReqSource || (rawConnType === 'CUSTOMER' ? 'CUSTOMERS' : 'SUPPLIERS');
+
+        const actualType = isRequester
+          ? (requestSource === 'CUSTOMERS' ? 'CUSTOMER' : 'SUPPLIER')
+          : (requestSource === 'CUSTOMERS' ? 'SUPPLIER' : 'CUSTOMER');
+
         const otherBusiness = isRequester
           ? connection.receiver!
           : connection.requester;
+
         const balance = new Decimal((connection.account?.balance as any) || 0);
-        const amountForMe = isRequester ? balance : balance.negated();
+        const isCustomer = actualType === 'CUSTOMER';
+        const direction = isCustomer
+          ? (balance.greaterThan(0) ? 'RECEIVABLE' : 'PAYABLE')
+          : (balance.greaterThan(0) ? 'PAYABLE' : 'RECEIVABLE');
 
         return {
           connectionId: connection.id,
@@ -365,8 +392,8 @@ export class ReportsService {
           dueDate: connection.account?.dueDate,
           billingCycle: connection.account?.billingCycle,
           balance: balance.toString(),
-          amount: amountForMe.abs().toString(),
-          direction: amountForMe.greaterThan(0) ? 'RECEIVABLE' : 'PAYABLE',
+          amount: balance.abs().toString(),
+          direction,
           isOverdue: connection.account?.dueDate
             ? connection.account.dueDate <= new Date()
             : false,
