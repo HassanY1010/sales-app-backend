@@ -18,6 +18,7 @@ import { Decimal } from 'decimal.js';
 const mockPrisma = {
   connection: { findFirst: jest.fn() },
   customerSupplierLink: { findFirst: jest.fn() },
+  account: { create: jest.fn(), findUnique: jest.fn() },
   business: { findUnique: jest.fn(), findFirst: jest.fn() },
   order: {
     create: jest.fn(),
@@ -35,7 +36,10 @@ const mockPrisma = {
 const mockFinanceService = { recordFinancialMovement: jest.fn() };
 const mockNotificationsService = { sendPushNotification: jest.fn() };
 const mockEventsGateway = { emitToBusiness: jest.fn() };
-const mockInvoiceNumberService = { generateInvoiceNumber: jest.fn().mockResolvedValue('INV-1001') };
+const mockInvoiceNumberService = {
+  getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
+  generateInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
+};
 
 // ====================================================================
 // Test Suite
@@ -59,6 +63,7 @@ describe('OrdersService', () => {
 
     // Reset all mocks between tests
     jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation(async (callback: any) => callback(mockPrisma));
   });
 
   // ----------------------------------------------------------------
@@ -91,6 +96,7 @@ describe('OrdersService', () => {
         id: 'conn-1',
         requesterId: 'biz-1',
         receiverId: 'biz-2',
+        status: 'ACCEPTED',
         showPrices: true,
         account: {
           id: 'acc-1',
@@ -100,11 +106,11 @@ describe('OrdersService', () => {
           dueDate: null,
         },
       });
-      mockPrisma.business.findUnique.mockResolvedValue({
-        id: 'biz-1',
-        name: 'Business 1',
-        user: { id: 'user-1', userType: 'business' },
-      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        name: `Business ${where.id}`,
+        user: { id: `user-${where.id}`, userType: 'business' },
+      }));
 
       await expect(
         service.createOrder(
@@ -124,6 +130,7 @@ describe('OrdersService', () => {
         id: 'conn-1',
         requesterId: 'biz-1',
         receiverId: 'biz-2',
+        status: 'ACCEPTED',
         showPrices: false,
         account: {
           id: 'acc-1',
@@ -133,11 +140,11 @@ describe('OrdersService', () => {
           dueDate: null,
         },
       });
-      mockPrisma.business.findUnique.mockResolvedValue({
-        id: 'biz-2',
-        name: 'Consumer 2',
-        user: { id: 'user-2', userType: 'individual' },
-      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        name: `Consumer ${where.id}`,
+        user: { id: `user-${where.id}`, userType: 'individual' },
+      }));
 
       await expect(
         service.createOrder(
@@ -146,6 +153,104 @@ describe('OrdersService', () => {
           'individual',
         ),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should create order when connection is ACCEPTED and account exists in reverse direction B -> A', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-1',
+        requesterId: 'biz-2',
+        receiverId: 'biz-1',
+        status: 'ACCEPTED',
+        showPrices: true,
+        account: {
+          id: 'acc-1',
+          totalDebit: new Decimal('0'),
+          creditLimit: new Decimal('100000'),
+          currency: 'YER',
+        },
+      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        name: `Biz ${where.id}`,
+        user: { id: `user-${where.id}`, userType: 'business' },
+      }));
+      mockInvoiceNumberService.generateInvoiceNumber.mockResolvedValue('INV-999');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-100',
+        orderNumber: 'INV-999',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        connectionId: 'conn-1',
+        status: 'PENDING',
+        items: [],
+      });
+
+      const result = await service.createOrder(
+        'biz-1',
+        { receiverId: 'biz-2', items: [] } as any,
+        'business',
+      );
+
+      expect(result.id).toBe('ord-100');
+      expect(mockPrisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            senderId: 'biz-1',
+            receiverId: 'biz-2',
+            connectionId: 'conn-1',
+          }),
+        }),
+      );
+    });
+
+    it('should auto-create standard Account when ACCEPTED connection is missing an account', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-no-acc',
+        requesterId: 'biz-1',
+        receiverId: 'biz-2',
+        status: 'ACCEPTED',
+        showPrices: true,
+        account: null,
+      });
+      mockPrisma.account.create.mockResolvedValue({
+        id: 'acc-new',
+        connectionId: 'conn-no-acc',
+        balance: 0,
+        totalCredit: 0,
+        totalDebit: 0,
+        creditLimit: 100000,
+        currency: 'YER',
+      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        name: `Biz ${where.id}`,
+        user: { id: `user-${where.id}`, userType: 'business' },
+      }));
+      mockInvoiceNumberService.generateInvoiceNumber.mockResolvedValue('INV-1000');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-200',
+        orderNumber: 'INV-1000',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        connectionId: 'conn-no-acc',
+        status: 'PENDING',
+        items: [],
+      });
+
+      const result = await service.createOrder(
+        'biz-1',
+        { receiverId: 'biz-2', items: [] } as any,
+        'business',
+      );
+
+      expect(mockPrisma.account.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          connectionId: 'conn-no-acc',
+          creditLimit: 100000,
+          currency: 'YER',
+        }),
+      });
+      expect(result.id).toBe('ord-200');
     });
   });
 

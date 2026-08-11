@@ -43,11 +43,9 @@ export class OrdersService {
       }
     }
 
-    const expectedRole = (userType === 'individual' || (dto as any).connectionType === 'SUPPLIER') ? 'SUPPLIER' : 'CUSTOMER';
     const connection = await this.resolveAcceptedConnection(
       senderId,
       dto.receiverId,
-      expectedRole,
     );
 
     if (!connection?.account) {
@@ -817,74 +815,90 @@ export class OrdersService {
     };
   }
 
-  private async resolveAcceptedConnection(senderId: string, receiverId: string, expectedRole?: 'CUSTOMER' | 'SUPPLIER') {
+  private async resolveAcceptedConnection(senderId: string, receiverId: string) {
     if (!senderId || !receiverId) return null;
 
-    // 1. Resolve receiverBiz if receiverId is user.id or business.id
+    // 1. Resolve counterparty Business ID according to strict API Contract (receiverId = Business.id)
     const receiverBiz = await this.prisma.business.findFirst({
       where: { OR: [{ id: receiverId }, { userId: receiverId }] },
       select: { id: true },
     });
     const actualBizId = receiverBiz?.id || receiverId;
 
-    const roleFilter = expectedRole ? [
-      { requesterId: senderId, connectionType: expectedRole },
-      { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
-    ] : undefined;
-
-    // 2. Query connection using proper AND/OR nesting in Prisma
+    // 2. Primary Contract Search: Find an ACCEPTED connection between senderId and actualBizId (Bi-directional)
     let connection = await this.prisma.connection.findFirst({
       where: {
         status: 'ACCEPTED',
-        AND: [
-          {
-            OR: [
-              { id: receiverId, OR: [{ requesterId: senderId }, { receiverId: senderId }] },
-              { requesterId: senderId, receiverId: actualBizId },
-              { requesterId: actualBizId, receiverId: senderId },
-            ],
-          },
-          ...(roleFilter ? [{ OR: roleFilter }] : []),
+        OR: [
+          { requesterId: senderId, receiverId: actualBizId },
+          { requesterId: actualBizId, receiverId: senderId },
         ],
       },
       include: { account: true, requester: true, receiver: true },
     });
 
-    if (connection) return connection;
+    // 3. Fallback for legacy requests passing direct Connection.id
+    if (!connection) {
+      connection = await this.prisma.connection.findFirst({
+        where: {
+          id: receiverId,
+          status: 'ACCEPTED',
+          OR: [{ requesterId: senderId }, { receiverId: senderId }],
+        },
+        include: { account: true, requester: true, receiver: true },
+      });
+    }
 
-    // 3. Check if receiverId is a CustomerSupplierLink or linked dual connection
-    const link = await this.prisma.customerSupplierLink.findFirst({
-      where: {
-        OR: [{ id: receiverId }, { customerId: receiverId }, { supplierId: receiverId }],
-        status: 'ACTIVE',
-      },
-      include: {
-        customer: { include: { account: true } },
-        supplier: { include: { account: true } },
-      },
-    });
+    // 4. Fallback: Check CustomerSupplierLink for linked dual connections
+    if (!connection) {
+      const link = await this.prisma.customerSupplierLink.findFirst({
+        where: {
+          OR: [
+            { id: receiverId },
+            { customerId: receiverId },
+            { supplierId: receiverId },
+            { customer: { requesterId: senderId, receiverId: actualBizId } },
+            { customer: { requesterId: actualBizId, receiverId: senderId } },
+            { supplier: { requesterId: senderId, receiverId: actualBizId } },
+            { supplier: { requesterId: actualBizId, receiverId: senderId } },
+          ],
+          status: 'ACTIVE',
+        },
+        include: {
+          customer: { include: { account: true, requester: true, receiver: true } },
+          supplier: { include: { account: true, requester: true, receiver: true } },
+        },
+      });
 
-    if (link) {
-      if (expectedRole === 'CUSTOMER' && link.customer.status === 'ACCEPTED') {
-        return link.customer;
-      }
-      if (expectedRole === 'SUPPLIER' && link.supplier.status === 'ACCEPTED') {
-        return link.supplier;
-      }
-      if (
-        (link.customer.requesterId === senderId || link.customer.receiverId === senderId) &&
-        link.customer.status === 'ACCEPTED'
-      ) {
-        return link.customer;
-      }
-      if (
-        (link.supplier.requesterId === senderId || link.supplier.receiverId === senderId) &&
-        link.supplier.status === 'ACCEPTED'
-      ) {
-        return link.supplier;
+      if (link) {
+        if (link.customer?.status === 'ACCEPTED' && link.customer.account) {
+          connection = link.customer;
+        } else if (link.supplier?.status === 'ACCEPTED' && link.supplier.account) {
+          connection = link.supplier;
+        } else {
+          connection = (link.customer?.status === 'ACCEPTED' ? link.customer : null) ||
+                     (link.supplier?.status === 'ACCEPTED' ? link.supplier : null);
+        }
       }
     }
 
-    return null;
+    if (!connection || connection.status !== 'ACCEPTED') return null;
+
+    // 5. Standard Account Provisioning for ACCEPTED Connection if account is missing
+    if (!connection.account) {
+      const newAccount = await this.prisma.account.create({
+        data: {
+          connectionId: connection.id,
+          balance: 0,
+          totalCredit: 0,
+          totalDebit: 0,
+          creditLimit: 100000,
+          currency: 'YER',
+        },
+      });
+      connection.account = newAccount;
+    }
+
+    return connection;
   }
 }
