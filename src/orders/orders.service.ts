@@ -818,6 +818,8 @@ export class OrdersService {
   private async resolveAcceptedConnection(senderId: string, receiverId: string) {
     if (!senderId || !receiverId) return null;
 
+    const allowedStatuses = ['ACCEPTED', 'ACTIVE', 'accepted', 'active'];
+
     // 1. Resolve counterparty Business ID according to strict API Contract (receiverId = Business.id)
     const receiverBiz = await this.prisma.business.findFirst({
       where: { OR: [{ id: receiverId }, { userId: receiverId }] },
@@ -825,10 +827,10 @@ export class OrdersService {
     });
     const actualBizId = receiverBiz?.id || receiverId;
 
-    // 2. Primary Contract Search: Find an ACCEPTED connection between senderId and actualBizId (Bi-directional)
+    // 2. Primary Contract Search: Find an ACCEPTED/ACTIVE connection between senderId and actualBizId (Bi-directional)
     let connection = await this.prisma.connection.findFirst({
       where: {
-        status: 'ACCEPTED',
+        status: { in: allowedStatuses },
         OR: [
           { requesterId: senderId, receiverId: actualBizId },
           { requesterId: actualBizId, receiverId: senderId },
@@ -837,13 +839,12 @@ export class OrdersService {
       include: { account: true, requester: true, receiver: true },
     });
 
-    // 3. Fallback for legacy requests passing direct Connection.id
+    // 3. Fallback for requests passing direct Connection.id
     if (!connection) {
       connection = await this.prisma.connection.findFirst({
         where: {
           id: receiverId,
-          status: 'ACCEPTED',
-          OR: [{ requesterId: senderId }, { receiverId: senderId }],
+          status: { in: allowedStatuses },
         },
         include: { account: true, requester: true, receiver: true },
       });
@@ -862,7 +863,7 @@ export class OrdersService {
             { supplier: { requesterId: senderId, receiverId: actualBizId } },
             { supplier: { requesterId: actualBizId, receiverId: senderId } },
           ],
-          status: 'ACTIVE',
+          status: { in: allowedStatuses },
         },
         include: {
           customer: { include: { account: true, requester: true, receiver: true } },
@@ -871,18 +872,18 @@ export class OrdersService {
       });
 
       if (link) {
-        if (link.customer?.status === 'ACCEPTED' && link.customer.account) {
+        if (allowedStatuses.includes(link.customer?.status || '') && link.customer?.account) {
           connection = link.customer;
-        } else if (link.supplier?.status === 'ACCEPTED' && link.supplier.account) {
+        } else if (allowedStatuses.includes(link.supplier?.status || '') && link.supplier?.account) {
           connection = link.supplier;
         } else {
-          connection = (link.customer?.status === 'ACCEPTED' ? link.customer : null) ||
-                     (link.supplier?.status === 'ACCEPTED' ? link.supplier : null);
+          connection = (allowedStatuses.includes(link.customer?.status || '') ? link.customer : null) ||
+                     (allowedStatuses.includes(link.supplier?.status || '') ? link.supplier : null);
         }
       }
     }
 
-    if (!connection || connection.status !== 'ACCEPTED') return null;
+    if (!connection || !allowedStatuses.includes(connection.status)) return null;
 
     // 5. Standard Account Provisioning for ACCEPTED Connection if account is missing
     if (!connection.account) {
