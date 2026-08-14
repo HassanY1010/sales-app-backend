@@ -28,4 +28,14 @@ describe('AppController', () => {
       expect(appController.getHello()).toBe('Hello World!');
     });
   });
+
+  describe('health', () => {
+    it('should return health status ok', () => {
+      expect(appController.checkHealth()).toEqual({
+        success: true,
+        status: 'ok',
+        service: 'sales-app-backend',
+      });
+    });
+  });
 });

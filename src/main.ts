@@ -56,7 +56,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { logger });
 
   // 1. API Versioning & Prefix
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api/v1', {
+    exclude: ['/', 'health', 'api/v1/health'],
+  });
 
   // 2. Security Headers
   app.use(helmet());

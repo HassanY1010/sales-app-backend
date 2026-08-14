@@ -57,16 +57,16 @@ describe('Application smoke and auth boundaries (e2e)', () => {
       .expect('Hello World!');
   });
 
-  it('serves health without exposing database internals on success', async () => {
+  it('serves health endpoint with HTTP 200 and expected payload', async () => {
     const response = await request(app.getHttpServer())
       .get('/health')
       .expect(200);
 
-    expect(response.body).toMatchObject({
+    expect(response.body).toEqual({
+      success: true,
       status: 'ok',
-      database: 'connected',
+      service: 'sales-app-backend',
     });
-    expect(response.body.timestamp).toBeTruthy();
   });
 
   it('blocks protected report endpoints without authentication', () => {

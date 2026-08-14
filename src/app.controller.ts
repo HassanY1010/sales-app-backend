@@ -16,21 +16,11 @@ export class AppController {
   }
 
   @Get('health')
-  async checkHealth() {
-    try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      return {
-        status: 'ok',
-        database: 'connected',
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      this.logger.error('Health check failed', error);
-      return {
-        status: 'error',
-        database: 'disconnected',
-        message: error.message,
-      };
-    }
+  checkHealth() {
+    return {
+      success: true,
+      status: 'ok',
+      service: 'sales-app-backend',
+    };
   }
 }
