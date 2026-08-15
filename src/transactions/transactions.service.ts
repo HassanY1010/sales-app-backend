@@ -52,6 +52,7 @@ export class TransactionsService {
           dueDate: dto.dueDate,
           attachmentUrl: dto.attachmentUrl,
           connectionId: dto.connectionId,
+          accountRole: dto.accountRole,
           clientId: dto.clientId, // Pass through for storage
         },
       );
@@ -68,7 +69,7 @@ export class TransactionsService {
       }
 
       return transaction;
-    });
+    }, { timeout: 30000 });
   }
 
 

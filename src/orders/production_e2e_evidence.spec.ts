@@ -291,7 +291,7 @@ describe('Production E2E Evidence Verification', () => {
 
     expect(order1.pricesVisible).toBe(false);
     expect(order1.priceAcceptedAt).toBeNull();
-    expect(order1.status).toBe('ISSUED');
+    expect(order1.status).toBe('PENDING');
 
     // Verify 0 transactions in Ledger before pricing
     const txnsBefore = Array.from(store.transactions.values()).filter((t) => t.orderId === order1.id);

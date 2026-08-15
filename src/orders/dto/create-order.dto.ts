@@ -74,4 +74,12 @@ export class CreateOrderDto {
   @IsString()
   @IsOptional()
   clientId?: string; // Device-generated UUID — used for idempotency (offline sync dedup)
+
+  @IsString()
+  @IsOptional()
+  connectionId?: string;
+
+  @IsString()
+  @IsOptional()
+  accountRole?: 'CUSTOMER' | 'SUPPLIER';
 }

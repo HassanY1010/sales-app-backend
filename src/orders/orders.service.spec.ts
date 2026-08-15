@@ -421,4 +421,269 @@ describe('OrdersService', () => {
       );
     });
   });
+
+  // ----------------------------------------------------------------
+  // Incoming Orders & Notification Separation Suite
+  // ----------------------------------------------------------------
+  describe('Incoming Orders & Notification Separation', () => {
+    it('should set status to PENDING and NOT create general notification DB record when purchase order sent to supplier without prices', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-1',
+        requesterId: 'cust-1',
+        receiverId: 'supp-1',
+        status: 'ACCEPTED',
+        showPrices: false,
+        account: {
+          id: 'acc-1',
+          totalDebit: new Decimal('0'),
+          creditLimit: new Decimal('100000'),
+          currency: 'YER',
+        },
+      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        name: `Biz ${where.id}`,
+        user: { id: `user-${where.id}`, userType: 'business' },
+      }));
+      mockInvoiceNumberService.getNextInvoiceNumber.mockResolvedValue('ORD-555');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-555',
+        orderNumber: 'ORD-555',
+        senderId: 'cust-1',
+        receiverId: 'supp-1',
+        connectionId: 'conn-1',
+        status: 'PENDING',
+        pricesVisible: false,
+        items: [{ id: 'item-1', productName: 'Item A', quantity: 5, unitPrice: '0', total: '0' }],
+      });
+
+      const result = await service.createOrder(
+        'cust-1',
+        {
+          receiverId: 'supp-1',
+          pricesVisible: false,
+          items: [{ productName: 'Item A', quantity: 5, unitPrice: '0' }],
+        } as any,
+        'business',
+      );
+
+      expect(result.status).toBe('PENDING');
+      expect(mockPrisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'PENDING',
+            pricesVisible: false,
+          }),
+        }),
+      );
+      // Ensure push notification is NOT called for PENDING purchase order (preventing duplicate general notification)
+      expect(mockNotificationsService.sendPushNotification).not.toHaveBeenCalled();
+      // Realtime event emitted
+      expect(mockEventsGateway.emitToBusiness).toHaveBeenCalledWith('supp-1', 'NEW_ORDER', expect.any(Object));
+    });
+
+    it('should return existing order on duplicate clientId (idempotency)', async () => {
+      const existingOrder = {
+        id: 'ord-existing',
+        clientId: 'device-uuid-123',
+        status: 'PENDING',
+        senderId: 'cust-1',
+        receiverId: 'supp-1',
+        items: [],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(existingOrder);
+
+      const result = await service.createOrder(
+        'cust-1',
+        {
+          clientId: 'device-uuid-123',
+          receiverId: 'supp-1',
+          items: [],
+        } as any,
+        'business',
+      );
+
+      expect(result).toEqual(existingOrder);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('should allow supplier to update prices on PENDING order and save prices correctly', async () => {
+      const pendingOrder = {
+        id: 'ord-pending',
+        status: 'PENDING',
+        senderId: 'cust-1',
+        receiverId: 'supp-1',
+        currency: 'YER',
+        total: '0',
+        paidAmount: '0',
+        items: [{ id: 'item-1', quantity: 2, unitPrice: '0' }],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(pendingOrder);
+      mockPrisma.orderItem.update.mockResolvedValue({ id: 'item-1', unitPrice: '500', total: '1000' });
+      mockPrisma.order.update.mockResolvedValue({
+        ...pendingOrder,
+        subtotal: '1000',
+        total: '1000',
+        pricesVisible: true,
+      });
+
+      const updated = await service.updateOrderPrices(
+        'supp-1',
+        'ord-pending',
+        {
+          items: [{ id: 'item-1', unitPrice: '500' }],
+        } as any,
+        'business',
+      );
+
+      expect(mockPrisma.orderItem.update).toHaveBeenCalledWith({
+        where: { id: 'item-1' },
+        data: { unitPrice: '500', total: '1000' },
+      });
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'ord-pending' },
+        data: expect.objectContaining({
+          subtotal: '1000',
+          total: '1000',
+          pricesVisible: true,
+        }),
+      });
+    });
+
+    it('should allow merchant (sender) to edit prices on ISSUED invoice and recalculate totals', async () => {
+      const issuedInvoice = {
+        id: 'inv-26',
+        orderNumber: '26',
+        status: 'ISSUED',
+        senderId: 'biz-hr',
+        receiverId: 'biz-client',
+        currency: 'YER',
+        total: '1300',
+        paidAmount: '0',
+        items: [
+          { id: 'item-1', itemName: 'ماء شملان', quantity: 1, unitPrice: '100', total: '100' },
+          { id: 'item-2', itemName: 'رز', quantity: 1, unitPrice: '1000', total: '1000' },
+          { id: 'item-3', itemName: 'كيك', quantity: 1, unitPrice: '200', total: '200' },
+        ],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(issuedInvoice);
+      mockPrisma.orderItem.update.mockResolvedValue({ id: 'item-1', unitPrice: '150', total: '150' });
+      mockPrisma.order.update.mockResolvedValue({
+        ...issuedInvoice,
+        subtotal: '1350',
+        total: '1350',
+      });
+
+      const updated = await service.updateOrderPrices(
+        'biz-hr',
+        'inv-26',
+        {
+          items: [
+            { id: 'item-1', unitPrice: '150' },
+            { id: 'item-2', unitPrice: '1000' },
+            { id: 'item-3', unitPrice: '200' },
+          ],
+        } as any,
+        'business',
+      );
+
+      expect(mockPrisma.orderItem.update).toHaveBeenCalledWith({
+        where: { id: 'item-1' },
+        data: { unitPrice: '150', total: '150' },
+      });
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'inv-26' },
+        data: expect.objectContaining({
+          subtotal: '1350',
+          total: '1350',
+        }),
+      });
+    });
+
+    it('should reject editing prices on REJECTED or CANCELLED orders with BadRequestException', async () => {
+      const rejectedOrder = {
+        id: 'ord-rej',
+        status: 'REJECTED',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        items: [],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(rejectedOrder);
+
+      await expect(
+        service.updateOrderPrices(
+          'biz-2',
+          'ord-rej',
+          { items: [] } as any,
+          'business',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject item ID not belonging to order with BadRequestException', async () => {
+      const order = {
+        id: 'ord-10',
+        status: 'PENDING',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        items: [{ id: 'item-legit', quantity: 1, unitPrice: '100' }],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(order);
+
+      await expect(
+        service.updateOrderPrices(
+          'biz-2',
+          'ord-10',
+          { items: [{ id: 'item-from-other-order', unitPrice: '500' }] } as any,
+          'business',
+        ),
+      ).rejects.toThrow(/لا ينتمي إلى هذه الطلبية/);
+    });
+
+    it('should reject third-party user C with ForbiddenException', async () => {
+      const order = {
+        id: 'ord-10',
+        status: 'PENDING',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        items: [{ id: 'item-1', quantity: 1, unitPrice: '100' }],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(order);
+
+      await expect(
+        service.updateOrderPrices(
+          'biz-intruder-3',
+          'ord-10',
+          { items: [{ id: 'item-1', unitPrice: '500' }] } as any,
+          'business',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should NOT create financial movement if totalDiff and paidDiff are zero on repeated save', async () => {
+      const invoice = {
+        id: 'inv-100',
+        orderNumber: 'INV-100',
+        status: 'ACCEPTED',
+        invoiceId: 'tx-100',
+        senderId: 'biz-1',
+        receiverId: 'biz-2',
+        total: '500',
+        paidAmount: '0',
+        items: [{ id: 'item-1', quantity: 1, unitPrice: '500', total: '500' }],
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(invoice);
+      mockPrisma.connection.findFirst.mockResolvedValue({ id: 'conn-1', account: { id: 'acc-1' } });
+
+      await service.updateOrderPrices(
+        'biz-1',
+        'inv-100',
+        { items: [{ id: 'item-1', unitPrice: '500' }] } as any,
+        'business',
+      );
+
+      // No financial movements because totalDiff is 0
+      expect(mockFinanceService.recordFinancialMovement).not.toHaveBeenCalled();
+    });
+  });
 });

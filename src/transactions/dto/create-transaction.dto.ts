@@ -64,4 +64,8 @@ export class CreateTransactionDto {
   @IsString()
   @IsOptional()
   clientId?: string; // Device-generated UUID — used for idempotency (offline sync dedup)
+
+  @IsEnum(['CUSTOMER', 'SUPPLIER'])
+  @IsOptional()
+  accountRole?: 'CUSTOMER' | 'SUPPLIER';
 }

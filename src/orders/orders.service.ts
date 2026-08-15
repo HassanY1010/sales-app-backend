@@ -43,15 +43,32 @@ export class OrdersService {
       }
     }
 
+    const isPurchase = dto.accountRole === 'SUPPLIER' || (dto.pricesVisible === false && !dto.accountRole) || (dto.notes?.includes('توريد') ?? false);
+    const expectedRole: 'CUSTOMER' | 'SUPPLIER' = dto.accountRole || (isPurchase ? 'SUPPLIER' : 'CUSTOMER');
+
     const connection = await this.resolveAcceptedConnection(
       senderId,
       dto.receiverId,
+      expectedRole,
+      dto.connectionId,
     );
 
     if (!connection?.account) {
       throw new BadRequestException(
         'يجب وجود ارتباط مقبول وحساب مالي لإنشاء طلبية',
       );
+    }
+
+    const senderPerspectiveRole =
+      connection.requesterId === senderId
+        ? connection.connectionType
+        : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+
+    if (dto.accountRole === 'CUSTOMER' && senderPerspectiveRole === 'SUPPLIER') {
+      throw new BadRequestException('لا يمكن إنشاء فاتورة مبيعات على حساب مورد');
+    }
+    if (dto.accountRole === 'SUPPLIER' && senderPerspectiveRole === 'CUSTOMER') {
+      throw new BadRequestException('لا يمكن إنشاء طلبية شراء على حساب عميل');
     }
 
     const actualReceiverBusinessId = connection.requesterId === senderId
@@ -138,7 +155,7 @@ export class OrdersService {
     return this.prisma.$transaction(async (prisma) => {
       // Generate sequential invoice number atomically inside the transaction
       const orderNumber = await this.invoiceNumberService.getNextInvoiceNumber(prisma);
-      const initialStatus = 'ISSUED';
+      const initialStatus = pricesVisible ? 'ISSUED' : 'PENDING';
       const order = await prisma.order.create({
         data: {
           orderNumber,
@@ -196,21 +213,22 @@ export class OrdersService {
             connectionId: connection.id,
           });
         }
-      }
 
-      await this.notificationsService.sendPushNotification(
-        receiverBusiness.user.id,
-        'فاتورة جديدة',
-        `وصلت إليك فاتورة رقم (${orderNumber}) من ${senderBusiness.name}`,
-        {
-          type: 'NEW_ORDER',
-          notificationType: 'new_order',
-          entityType: 'order',
-          entityId: order.id,
-          orderId: order.id,
-          route: `/receive-orders/incoming?orderId=${order.id}`,
-        },
-      );
+        // Send push notification for issued sales invoice
+        await this.notificationsService.sendPushNotification(
+          receiverBusiness.user.id,
+          'فاتورة جديدة',
+          `وصلت إليك فاتورة رقم (${orderNumber}) من ${senderBusiness.name}`,
+          {
+            type: 'NEW_ORDER',
+            notificationType: 'new_order',
+            entityType: 'order',
+            entityId: order.id,
+            orderId: order.id,
+            route: `/receive-orders/incoming?orderId=${order.id}`,
+          },
+        );
+      }
 
       this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {
         id: order.id,
@@ -239,7 +257,7 @@ export class OrdersService {
       });
 
       return this.sanitizeOrderForBusiness(order, senderId);
-    });
+    }, { timeout: 30000 });
   }
 
   async getOrders(businessId: string, pagination: PaginationDto) {
@@ -304,16 +322,24 @@ export class OrdersService {
       throw new NotFoundException('الطلبية غير موجودة');
     }
 
-    if (order.receiverId !== businessId) {
-      throw new ForbiddenException('فقط مستقبل الطلبية يمكنه اعتماد الأسعار');
+    if (order.receiverId !== businessId && order.senderId !== businessId) {
+      throw new ForbiddenException('ليس لديك صلاحية لتعديل هذه الفاتورة/الطلبية');
     }
 
     if (userType === 'individual') {
       throw new ForbiddenException('حساب المستهلك لا يعتمد أسعار طلبيات بيع');
     }
 
-    if (order.status !== 'PENDING') {
-      throw new BadRequestException('لا يمكن تعديل أسعار طلبية غير معلقة');
+    const lockedStatuses = ['REJECTED', 'CANCELLED', 'COMPLETED'];
+    if (lockedStatuses.includes(order.status)) {
+      throw new BadRequestException('لا يمكن تعديل أسعار طلبية ملغية أو مرفوضة أو مكتملة');
+    }
+
+    const orderItemIds = new Set(order.items.map((i) => i.id));
+    for (const dtoItem of dto.items) {
+      if (!orderItemIds.has(dtoItem.id)) {
+        throw new BadRequestException(`الصنف ${dtoItem.id} لا ينتمي إلى هذه الطلبية`);
+      }
     }
 
     const priceMap = new Map(
@@ -361,31 +387,34 @@ export class OrdersService {
         },
       });
 
-      // ── Instant Financial Movement Recalculation on Edit ──
-      const connection = await this.resolveAcceptedConnection(order.senderId, order.receiverId);
-      if (connection) {
-        if (!totalDiff.isZero()) {
-          await this.financeService.recordFinancialMovement(prisma, {
-            senderId: order.senderId,
-            receiverId: order.receiverId,
-            amount: totalDiff.abs().toString(),
-            type: totalDiff.greaterThan(0) ? 'SALE' : 'ADJUSTMENT',
-            orderId,
-            note: `تعديل قيمة الفاتورة رقم ${order.orderNumber}`,
-            connectionId: connection.id,
-          });
-        }
+      // ── Instant Financial Movement Recalculation on Edit (if already converted to invoice) ──
+      if (order.invoiceId) {
+        const connection = await this.resolveAcceptedConnection(order.senderId, order.receiverId);
+        if (connection) {
+          if (!totalDiff.isZero()) {
+            const isIncrease = totalDiff.greaterThan(0);
+            await this.financeService.recordFinancialMovement(prisma, {
+              senderId: isIncrease ? order.senderId : order.receiverId,
+              receiverId: isIncrease ? order.receiverId : order.senderId,
+              amount: totalDiff.abs().toString(),
+              type: isIncrease ? 'SALE' : 'ADJUSTMENT',
+              orderId,
+              note: `تعديل قيمة الفاتورة رقم ${order.orderNumber}`,
+              connectionId: connection.id,
+            });
+          }
 
-        if (!paidDiff.isZero()) {
-          await this.financeService.recordFinancialMovement(prisma, {
-            senderId: paidDiff.greaterThan(0) ? order.receiverId : order.senderId,
-            receiverId: paidDiff.greaterThan(0) ? order.senderId : order.receiverId,
-            amount: paidDiff.abs().toString(),
-            type: 'PAYMENT',
-            orderId,
-            note: `تعديل السداد للفاتورة رقم ${order.orderNumber}`,
-            connectionId: connection.id,
-          });
+          if (!paidDiff.isZero()) {
+            await this.financeService.recordFinancialMovement(prisma, {
+              senderId: paidDiff.greaterThan(0) ? order.receiverId : order.senderId,
+              receiverId: paidDiff.greaterThan(0) ? order.senderId : order.receiverId,
+              amount: paidDiff.abs().toString(),
+              type: 'PAYMENT',
+              orderId,
+              note: `تعديل السداد للفاتورة رقم ${order.orderNumber}`,
+              connectionId: connection.id,
+            });
+          }
         }
       }
     });
@@ -815,77 +844,112 @@ export class OrdersService {
     };
   }
 
-  private async resolveAcceptedConnection(senderId: string, receiverId: string) {
-    if (!senderId || !receiverId) return null;
+  private async resolveAcceptedConnection(
+    senderId: string,
+    receiverId: string,
+    expectedRole?: 'CUSTOMER' | 'SUPPLIER',
+    connectionId?: string,
+  ) {
+    if (!senderId || (!receiverId && !connectionId)) return null;
 
     const allowedStatuses = ['ACCEPTED', 'ACTIVE', 'accepted', 'active'];
+    let connection: any = null;
 
-    // 1. Resolve counterparty Business ID according to strict API Contract (receiverId = Business.id)
-    const receiverBiz = await this.prisma.business.findFirst({
-      where: { OR: [{ id: receiverId }, { userId: receiverId }] },
-      select: { id: true },
-    });
-    const actualBizId = receiverBiz?.id || receiverId;
-
-    // 2. Primary Contract Search: Find an ACCEPTED/ACTIVE connection between senderId and actualBizId (Bi-directional)
-    let connection = await this.prisma.connection.findFirst({
-      where: {
-        status: { in: allowedStatuses },
-        OR: [
-          { requesterId: senderId, receiverId: actualBizId },
-          { requesterId: actualBizId, receiverId: senderId },
-        ],
-      },
-      include: { account: true, requester: true, receiver: true },
-    });
-
-    // 3. Fallback for requests passing direct Connection.id
-    if (!connection) {
+    // 1. Direct connectionId lookup if provided
+    if (connectionId) {
       connection = await this.prisma.connection.findFirst({
         where: {
-          id: receiverId,
+          id: connectionId,
           status: { in: allowedStatuses },
         },
         include: { account: true, requester: true, receiver: true },
       });
     }
 
-    // 4. Fallback: Check CustomerSupplierLink for linked dual connections
-    if (!connection) {
-      const link = await this.prisma.customerSupplierLink.findFirst({
+    // 2. Resolve counterparty Business ID
+    if (!connection && receiverId) {
+      const receiverBiz = await this.prisma.business.findFirst({
+        where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+        select: { id: true },
+      });
+      const actualBizId = receiverBiz?.id || receiverId;
+
+      // 3. Primary Contract Search with strict role filtering
+      const orClauses: any[] = [];
+      if (expectedRole === 'CUSTOMER') {
+        orClauses.push(
+          { requesterId: senderId, receiverId: actualBizId, connectionType: 'CUSTOMER' },
+          { requesterId: actualBizId, receiverId: senderId, connectionType: 'SUPPLIER' },
+        );
+      } else if (expectedRole === 'SUPPLIER') {
+        orClauses.push(
+          { requesterId: senderId, receiverId: actualBizId, connectionType: 'SUPPLIER' },
+          { requesterId: actualBizId, receiverId: senderId, connectionType: 'CUSTOMER' },
+        );
+      } else {
+        orClauses.push(
+          { requesterId: senderId, receiverId: actualBizId },
+          { requesterId: actualBizId, receiverId: senderId },
+        );
+      }
+
+      connection = await this.prisma.connection.findFirst({
         where: {
-          OR: [
-            { id: receiverId },
-            { customerId: receiverId },
-            { supplierId: receiverId },
-            { customer: { requesterId: senderId, receiverId: actualBizId } },
-            { customer: { requesterId: actualBizId, receiverId: senderId } },
-            { supplier: { requesterId: senderId, receiverId: actualBizId } },
-            { supplier: { requesterId: actualBizId, receiverId: senderId } },
-          ],
           status: { in: allowedStatuses },
+          OR: orClauses,
         },
-        include: {
-          customer: { include: { account: true, requester: true, receiver: true } },
-          supplier: { include: { account: true, requester: true, receiver: true } },
-        },
+        include: { account: true, requester: true, receiver: true },
       });
 
-      if (link) {
-        if (allowedStatuses.includes(link.customer?.status || '') && link.customer?.account) {
-          connection = link.customer;
-        } else if (allowedStatuses.includes(link.supplier?.status || '') && link.supplier?.account) {
-          connection = link.supplier;
-        } else {
-          connection = (allowedStatuses.includes(link.customer?.status || '') ? link.customer : null) ||
-                     (allowedStatuses.includes(link.supplier?.status || '') ? link.supplier : null);
+      // 4. Fallback for requests passing direct Connection.id as receiverId
+      if (!connection) {
+        connection = await this.prisma.connection.findFirst({
+          where: {
+            id: receiverId,
+            status: { in: allowedStatuses },
+          },
+          include: { account: true, requester: true, receiver: true },
+        });
+      }
+
+      // 5. Fallback: Check CustomerSupplierLink for linked dual connections
+      if (!connection) {
+        const link = await this.prisma.customerSupplierLink.findFirst({
+          where: {
+            OR: [
+              { id: receiverId },
+              { customerId: receiverId },
+              { supplierId: receiverId },
+              { customer: { requesterId: senderId, receiverId: actualBizId } },
+              { customer: { requesterId: actualBizId, receiverId: senderId } },
+              { supplier: { requesterId: senderId, receiverId: actualBizId } },
+              { supplier: { requesterId: actualBizId, receiverId: senderId } },
+            ],
+            status: { in: allowedStatuses },
+          },
+          include: {
+            customer: { include: { account: true, requester: true, receiver: true } },
+            supplier: { include: { account: true, requester: true, receiver: true } },
+          },
+        });
+
+        if (link) {
+          if (expectedRole === 'CUSTOMER' && allowedStatuses.includes(link.customer?.status || '') && link.customer?.account) {
+            connection = link.customer;
+          } else if (expectedRole === 'SUPPLIER' && allowedStatuses.includes(link.supplier?.status || '') && link.supplier?.account) {
+            connection = link.supplier;
+          } else if (allowedStatuses.includes(link.customer?.status || '') && link.customer?.account) {
+            connection = link.customer;
+          } else if (allowedStatuses.includes(link.supplier?.status || '') && link.supplier?.account) {
+            connection = link.supplier;
+          }
         }
       }
     }
 
     if (!connection || !allowedStatuses.includes(connection.status)) return null;
 
-    // 5. Standard Account Provisioning for ACCEPTED Connection if account is missing
+    // 6. Standard Account Provisioning for ACCEPTED Connection if account is missing
     if (!connection.account) {
       const newAccount = await this.prisma.account.create({
         data: {

@@ -56,29 +56,77 @@ export class FinanceService {
     }
 
     const expectedRole = accountRole || (type === 'SALE' ? 'CUSTOMER' : type === 'PURCHASE' ? 'SUPPLIER' : undefined);
+    const allowedStatuses = ['ACCEPTED', 'ACTIVE', 'accepted', 'active'];
 
     let connection = connectionId
       ? await tx.connection.findFirst({
-          where: { id: connectionId, status: 'ACCEPTED' },
+          where: { id: connectionId, status: { in: allowedStatuses } },
           include: { account: true },
         })
       : null;
 
+    if (connection) {
+      // Validate that connection belongs to transacting parties
+      const isParty =
+        (connection.requesterId === senderId && connection.receiverId === receiverId) ||
+        (connection.requesterId === receiverId && connection.receiverId === senderId);
+      
+      if (!isParty) {
+        // Check if receiverId was userId
+        const receiverBiz = await tx.business.findFirst({
+          where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+          select: { id: true },
+        });
+        const actualBizId = receiverBiz?.id || receiverId;
+        const isPartyWithBiz =
+          (connection.requesterId === senderId && connection.receiverId === actualBizId) ||
+          (connection.requesterId === actualBizId && connection.receiverId === senderId);
+
+        if (!isPartyWithBiz) {
+          throw new BadRequestException('الارتباط المحدد لا يخص أطراف هذه المعاملة');
+        }
+      }
+
+      const senderPerspectiveRole =
+        connection.requesterId === senderId
+          ? connection.connectionType
+          : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+
+      if (expectedRole && senderPerspectiveRole !== expectedRole) {
+        if (type === 'SALE') {
+          throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
+        }
+        if (type === 'PURCHASE') {
+          throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
+        }
+        throw new BadRequestException(`نوع الارتباط (${senderPerspectiveRole}) لا يتطابق مع الدور المطلوب (${expectedRole})`);
+      }
+    }
+
     if (!connection) {
-      // 1. Check direct connection by business IDs
+      // 1. Check direct connection by business IDs with strict role separation
+      const orClauses: any[] = [];
+      if (expectedRole === 'CUSTOMER') {
+        orClauses.push(
+          { requesterId: senderId, receiverId: receiverId, connectionType: 'CUSTOMER' },
+          { requesterId: receiverId, receiverId: senderId, connectionType: 'SUPPLIER' },
+        );
+      } else if (expectedRole === 'SUPPLIER') {
+        orClauses.push(
+          { requesterId: senderId, receiverId: receiverId, connectionType: 'SUPPLIER' },
+          { requesterId: receiverId, receiverId: senderId, connectionType: 'CUSTOMER' },
+        );
+      } else {
+        orClauses.push(
+          { requesterId: senderId, receiverId: receiverId },
+          { requesterId: receiverId, receiverId: senderId },
+        );
+      }
+
       connection = await tx.connection.findFirst({
         where: {
-          OR: [
-            { requesterId: senderId, receiverId: receiverId },
-            { requesterId: receiverId, receiverId: senderId },
-          ],
-          status: 'ACCEPTED',
-          ...(expectedRole ? {
-            OR: [
-              { requesterId: senderId, connectionType: expectedRole },
-              { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
-            ]
-          } : {}),
+          status: { in: allowedStatuses },
+          OR: orClauses,
         },
         include: { account: true },
       });
@@ -91,19 +139,28 @@ export class FinanceService {
         select: { id: true },
       });
       if (receiverBiz?.id) {
+        const orClauses: any[] = [];
+        if (expectedRole === 'CUSTOMER') {
+          orClauses.push(
+            { requesterId: senderId, receiverId: receiverBiz.id, connectionType: 'CUSTOMER' },
+            { requesterId: receiverBiz.id, receiverId: senderId, connectionType: 'SUPPLIER' },
+          );
+        } else if (expectedRole === 'SUPPLIER') {
+          orClauses.push(
+            { requesterId: senderId, receiverId: receiverBiz.id, connectionType: 'SUPPLIER' },
+            { requesterId: receiverBiz.id, receiverId: senderId, connectionType: 'CUSTOMER' },
+          );
+        } else {
+          orClauses.push(
+            { requesterId: senderId, receiverId: receiverBiz.id },
+            { requesterId: receiverBiz.id, receiverId: senderId },
+          );
+        }
+
         connection = await tx.connection.findFirst({
           where: {
-            OR: [
-              { requesterId: senderId, receiverId: receiverBiz.id },
-              { requesterId: receiverBiz.id, receiverId: senderId },
-            ],
-            status: 'ACCEPTED',
-            ...(expectedRole ? {
-              OR: [
-                { requesterId: senderId, connectionType: expectedRole },
-                { receiverId: senderId, connectionType: expectedRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER' },
-              ]
-            } : {}),
+            status: { in: allowedStatuses },
+            OR: orClauses,
           },
           include: { account: true },
         });
@@ -115,7 +172,7 @@ export class FinanceService {
       const link = await tx.customerSupplierLink.findFirst({
         where: {
           OR: [{ id: receiverId }, { customerId: receiverId }, { supplierId: receiverId }],
-          status: 'ACTIVE',
+          status: { in: allowedStatuses },
         },
         include: {
           customer: { include: { account: true } },
@@ -123,13 +180,13 @@ export class FinanceService {
         },
       });
       if (link) {
-        if (expectedRole === 'CUSTOMER') {
+        if (expectedRole === 'CUSTOMER' && link.customer?.account) {
           connection = link.customer;
-        } else if (expectedRole === 'SUPPLIER') {
+        } else if (expectedRole === 'SUPPLIER' && link.supplier?.account) {
           connection = link.supplier;
-        } else if (link.customer.requesterId === senderId || link.customer.receiverId === senderId) {
+        } else if (link.customer?.account) {
           connection = link.customer;
-        } else if (link.supplier.requesterId === senderId || link.supplier.receiverId === senderId) {
+        } else if (link.supplier?.account) {
           connection = link.supplier;
         }
       }
@@ -139,6 +196,18 @@ export class FinanceService {
       throw new BadRequestException(
         'Active connection and financial account required',
       );
+    }
+
+    const senderPerspectiveRole =
+      connection.requesterId === senderId
+        ? connection.connectionType
+        : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+
+    if (type === 'SALE' && senderPerspectiveRole === 'SUPPLIER') {
+      throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
+    }
+    if (type === 'PURCHASE' && senderPerspectiveRole === 'CUSTOMER') {
+      throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
     }
 
     // 2. Calculate balance change from requester's perspective
