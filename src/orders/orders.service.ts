@@ -389,30 +389,38 @@ export class OrdersService {
 
       // ── Instant Financial Movement Recalculation on Edit (if already converted to invoice) ──
       if (order.invoiceId) {
-        const connection = await this.resolveAcceptedConnection(order.senderId, order.receiverId);
+        const existingInvoice = await (prisma.transaction || this.prisma.transaction)?.findFirst({
+          where: { id: order.invoiceId },
+        });
+        const sellerId = existingInvoice?.senderId || order.receiverId;
+        const buyerId = existingInvoice?.receiverId || order.senderId;
+
+        const connection = await this.resolveAcceptedConnection(sellerId, buyerId, 'CUSTOMER');
         if (connection) {
           if (!totalDiff.isZero()) {
             const isIncrease = totalDiff.greaterThan(0);
             await this.financeService.recordFinancialMovement(prisma, {
-              senderId: isIncrease ? order.senderId : order.receiverId,
-              receiverId: isIncrease ? order.receiverId : order.senderId,
+              senderId: sellerId,
+              receiverId: buyerId,
               amount: totalDiff.abs().toString(),
               type: isIncrease ? 'SALE' : 'ADJUSTMENT',
               orderId,
               note: `تعديل قيمة الفاتورة رقم ${order.orderNumber}`,
               connectionId: connection.id,
+              accountRole: 'CUSTOMER',
             });
           }
 
           if (!paidDiff.isZero()) {
             await this.financeService.recordFinancialMovement(prisma, {
-              senderId: paidDiff.greaterThan(0) ? order.receiverId : order.senderId,
-              receiverId: paidDiff.greaterThan(0) ? order.senderId : order.receiverId,
+              senderId: buyerId,
+              receiverId: sellerId,
               amount: paidDiff.abs().toString(),
               type: 'PAYMENT',
               orderId,
               note: `تعديل السداد للفاتورة رقم ${order.orderNumber}`,
               connectionId: connection.id,
+              accountRole: 'CUSTOMER',
             });
           }
         }
@@ -536,10 +544,10 @@ export class OrdersService {
         let invoiceNumber = existingInvoice?.voucherNumber;
 
         if (!existingInvoice) {
-          // Record SALE movement (Invoice)
+          // Record SALE movement (Invoice) - Issued by Seller (order.receiverId) to Buyer (order.senderId)
           const movement = await this.financeService.recordFinancialMovement(prisma, {
-            senderId: order.senderId,
-            receiverId: order.receiverId,
+            senderId: order.receiverId,
+            receiverId: order.senderId,
             amount: order.total,
             type: 'SALE',
             orderId: order.id,
@@ -547,17 +555,18 @@ export class OrdersService {
             dueDate: order.dueDate ?? undefined,
             note: order.isCash ? `فاتورة نقدية #${order.orderNumber}` : `فاتورة آجل #${order.orderNumber}`,
             connectionId: connection!.id,
+            accountRole: 'CUSTOMER',
           });
 
           invoiceId = movement.transaction.id;
           invoiceNumber = movement.transaction.voucherNumber;
 
-          // Record payment for cash orders or partial paidAmount
+          // Record payment for cash orders or partial paidAmount - Paid by Buyer (order.senderId) to Seller (order.receiverId)
           const paidAmount = order.isCash ? new Decimal(order.total as any) : new Decimal((order as any).paidAmount || '0');
           if (paidAmount.greaterThan(0)) {
             await this.financeService.recordFinancialMovement(prisma, {
-              senderId: order.receiverId,
-              receiverId: order.senderId,
+              senderId: order.senderId,
+              receiverId: order.receiverId,
               amount: paidAmount.toString(),
               type: 'PAYMENT',
               orderId: order.id,
@@ -565,6 +574,7 @@ export class OrdersService {
               dueDate: order.dueDate ?? undefined,
               note: order.isCash ? `سداد فوري للفاتورة النقدية #${order.orderNumber}` : `سداد جزئي للفاتورة الآجلة #${order.orderNumber}`,
               connectionId: connection!.id,
+              accountRole: 'CUSTOMER',
             });
           }
         }
