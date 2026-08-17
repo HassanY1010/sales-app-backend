@@ -337,16 +337,26 @@ export class OrdersService {
 
     await this.prisma.$transaction(async (prisma) => {
       for (const item of order.items) {
-        const unitPrice =
-          priceMap.get(item.id) ?? new Decimal(item.unitPrice as any);
-        const total = unitPrice.mul(item.quantity);
+        const dtoItem = dto.items.find((x) => x.id === item.id);
+        const unitPrice = dtoItem
+          ? new Decimal(dtoItem.unitPrice)
+          : new Decimal(item.unitPrice as any);
+        const quantity = dtoItem?.quantity !== undefined ? dtoItem.quantity : item.quantity;
+        const itemName = dtoItem?.itemName ?? item.itemName;
+        const unit = dtoItem?.unit ?? item.unit;
+        const total = unitPrice.mul(quantity);
         subtotal = subtotal.plus(total);
+        const updateData: any = {
+          unitPrice: unitPrice.toString(),
+          total: total.toString(),
+        };
+        if (dtoItem?.quantity !== undefined) updateData.quantity = dtoItem.quantity;
+        if (dtoItem?.itemName !== undefined) updateData.itemName = dtoItem.itemName;
+        if (dtoItem?.unit !== undefined) updateData.unit = dtoItem.unit;
+
         await prisma.orderItem.update({
           where: { id: item.id },
-          data: {
-            unitPrice: unitPrice.toString(),
-            total: total.toString(),
-          },
+          data: updateData,
         });
       }
 

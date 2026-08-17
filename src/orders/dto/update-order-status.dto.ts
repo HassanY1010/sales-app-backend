@@ -44,6 +44,17 @@ export class UpdateOrderPriceItemDto {
 
   @IsNumberString()
   unitPrice: string;
+
+  @IsOptional()
+  @IsString()
+  itemName?: string;
+
+  @IsOptional()
+  quantity?: number;
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
 }
 
 export class UpdateOrderPricesDto {
