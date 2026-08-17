@@ -335,9 +335,7 @@ export class ConnectionsService {
     const dueDate = options?.dueDate ? new Date(options.dueDate) : null;
     const openingBalance = options?.openingBalance ?? Number(connection.pendingOpenBalance ?? 0);
     const showPrices = options?.showPrices ?? false;
-
     const isRequester = connection.requesterId === businessId;
-    const dbOpeningBalance = isRequester ? openingBalance : -openingBalance;
 
     // Accept connection and auto-create a financial Account with credit config if it doesn't exist
     return this.prisma.$transaction(async (prisma) => {
@@ -989,11 +987,6 @@ export class ConnectionsService {
     const receiverId = connection.receiverId;
 
     return this.prisma.$transaction(async (tx) => {
-      let dbOpeningBalance = terms.openingBalance;
-      if (dbOpeningBalance !== undefined) {
-        dbOpeningBalance = isRequester ? dbOpeningBalance : -dbOpeningBalance;
-      }
-
       const updated = await tx.account.update({
         where: { id: account.id },
         data: {
@@ -1009,7 +1002,8 @@ export class ConnectionsService {
         },
       });
 
-      if (dbOpeningBalance !== undefined) {
+      if (terms.openingBalance !== undefined) {
+        const openingVal = terms.openingBalance;
         // Find existing opening balance transaction
         const existingAdjustment = await tx.transaction.findFirst({
           where: {
@@ -1022,14 +1016,14 @@ export class ConnectionsService {
           },
         });
 
-        if (dbOpeningBalance === 0) {
+        if (openingVal === 0) {
           if (existingAdjustment) {
             await tx.transaction.delete({ where: { id: existingAdjustment.id } });
           }
         } else {
-          const senderId = dbOpeningBalance > 0 ? connection.requesterId : receiverId;
-          const targetReceiverId = dbOpeningBalance > 0 ? receiverId : connection.requesterId;
-          const amount = Math.abs(dbOpeningBalance);
+          const senderId = connection.requesterId;
+          const targetReceiverId = connection.receiverId!;
+          const amount = Math.abs(openingVal);
 
           if (existingAdjustment) {
             await tx.transaction.update({
@@ -1038,7 +1032,8 @@ export class ConnectionsService {
                 amount,
                 senderId,
                 receiverId: targetReceiverId,
-                note: `رصيد افتتاحي: ${terms.openingBalance}`,
+                note: `رصيد افتتاحي: ${openingVal}`,
+                connectionId: connection.id,
               },
             });
           } else {
@@ -1048,7 +1043,8 @@ export class ConnectionsService {
                 amount,
                 senderId,
                 receiverId: targetReceiverId,
-                note: `رصيد افتتاحي: ${terms.openingBalance}`,
+                note: `رصيد افتتاحي: ${openingVal}`,
+                connectionId: connection.id,
               },
             });
           }

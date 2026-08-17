@@ -218,27 +218,45 @@ export class FinanceService {
     // Negative balance (< 0):
     //   - For CUSTOMER: Merchant owes Customer (له - رصيد دائن للعميل)
     //   - For SUPPLIER: Supplier owes Merchant (عليه - مديونية على المورد)
-    const isSenderRequester = connection.requesterId === senderId;
     let balanceChange = new Decimal(0);
 
+    let netImpactAmount = decimalAmount;
+    if (orderId && (type === 'SALE' || type === 'PURCHASE')) {
+      const linkedOrder = await tx.order.findUnique({
+        where: { id: orderId },
+      });
+      if (linkedOrder) {
+        if (linkedOrder.isCash) {
+          netImpactAmount = new Decimal(0);
+        } else if (decimalAmount.equals(new Decimal(linkedOrder.total as any || '0'))) {
+          const paid = new Decimal(linkedOrder.paidAmount as any || '0');
+          netImpactAmount = Decimal.max(0, decimalAmount.minus(paid));
+        }
+      }
+    }
+
+    const isSenderRequester = connection.requesterId === senderId;
+    const isCustomer = (connection.connectionType || 'CUSTOMER').toUpperCase() === 'CUSTOMER';
+
     switch (type) {
-      case 'SALE': // Merchant sold on credit -> Customer debt increases (+amount)
-        balanceChange = isSenderRequester
-          ? decimalAmount
-          : decimalAmount.negated();
+      case 'SALE':
+        // For Customer account, a Sale increases customer debt (+netImpactAmount). For Supplier, it's a return (-netImpactAmount).
+        balanceChange = isCustomer ? netImpactAmount : netImpactAmount.negated();
         break;
-      case 'PURCHASE': // Merchant bought on credit -> Supplier credit increases (+amount)
-        balanceChange = isSenderRequester
-          ? decimalAmount
-          : decimalAmount.negated();
+      case 'PURCHASE':
+        // For Supplier account, a Purchase increases supplier credit (+netImpactAmount). For Customer, it's a return (-netImpactAmount).
+        balanceChange = isCustomer ? netImpactAmount.negated() : netImpactAmount;
         break;
-      case 'PAYMENT': // Payment reduces debt/credit (-amount)
+      case 'PAYMENT':
+        // Payment reduces balance (-amount)
         balanceChange = decimalAmount.negated();
         break;
-      case 'ADJUSTMENT': // Opening balance / Adjustment (+amount)
-        balanceChange = isSenderRequester
-          ? decimalAmount
-          : decimalAmount.negated();
+      case 'ADJUSTMENT':
+        if (params.note?.includes('افتتاحي')) {
+          balanceChange = decimalAmount;
+        } else {
+          balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();
+        }
         break;
     }
 
@@ -253,7 +271,6 @@ export class FinanceService {
 
     // 4. Update totalCredit and totalDebit based on the NEW balance and Connection Perspective
     const newBalance = new Decimal(updatedAccount.balance?.toString() ?? '0');
-    const isCustomer = connection.connectionType === 'CUSTOMER';
     const numBalance = newBalance.toNumber();
 
     let newTotalCredit = new Decimal(0);
@@ -460,36 +477,44 @@ export class FinanceService {
           },
         ],
       },
+      include: { order: true },
     });
 
+    const isCustomer = (account.connection?.connectionType || 'CUSTOMER').toUpperCase() === 'CUSTOMER';
     let balance = new Decimal(0);
     for (const t of transactions) {
-      const isSenderRequester = t.senderId === account.connection.requesterId;
-      const amount = new Decimal(t.amount as any);
+      let amount = new Decimal(t.amount as any);
+
+      if (t.order && (t.transactionType === 'SALE' || t.transactionType === 'PURCHASE')) {
+        if (t.order.isCash) {
+          amount = new Decimal(0);
+        } else if (t.order.paidAmount) {
+          const paid = new Decimal(t.order.paidAmount as any || '0');
+          amount = Decimal.max(0, amount.minus(paid));
+        }
+      }
 
       switch (t.transactionType) {
         case 'SALE':
-          balance = isSenderRequester
-            ? balance.plus(amount)
-            : balance.minus(amount);
+          balance = isCustomer ? balance.plus(amount) : balance.minus(amount);
           break;
         case 'PURCHASE':
-          balance = isSenderRequester
-            ? balance.plus(amount)
-            : balance.minus(amount);
+          balance = isCustomer ? balance.minus(amount) : balance.plus(amount);
           break;
         case 'PAYMENT':
           balance = balance.minus(amount);
           break;
         case 'ADJUSTMENT':
-          balance = isSenderRequester
-            ? balance.plus(amount)
-            : balance.minus(amount);
+          if (t.note?.includes('افتتاحي')) {
+            balance = balance.plus(amount);
+          } else {
+            const isSenderRequester = t.senderId === account.connection.requesterId;
+            balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
+          }
           break;
       }
     }
 
-    const isCustomer = account.connection.connectionType === 'CUSTOMER';
     const numBalance = balance.toNumber();
 
     let totalDebit = '0';

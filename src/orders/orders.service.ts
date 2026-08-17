@@ -182,7 +182,7 @@ export class OrdersService {
 
       // ── Immediate Financial Movement for ALL Invoices (Cash & Deferred) ──
       if (pricesVisible) {
-        // 1. Record the SALE movement (Debits receiver's account / increases debt for customer, records sale for supplier)
+        // 1. Record the SALE movement (Debits receiver's account / increases debt for customer by net remaining amount)
         await this.financeService.recordFinancialMovement(prisma, {
           senderId,
           receiverId: actualReceiverBusinessId,
@@ -193,26 +193,12 @@ export class OrdersService {
           dueDate: dueDate ?? undefined,
           note: isCash
             ? `فاتورة مبيعات نقدية رقم ${orderNumber}`
-            : `فاتورة مبيعات آجلة رقم ${orderNumber}`,
+            : (paidAmount.greaterThan(0)
+                ? `فاتورة مبيعات جزئية رقم ${orderNumber} (المدفوع: ${paidAmount.toString()})`
+                : `فاتورة مبيعات آجلة رقم ${orderNumber}`),
           connectionId: connection.id,
+          accountRole: 'CUSTOMER',
         });
-
-        // 2. If there is a paid amount (cash or down payment), record PAYMENT movement immediately
-        if (paidAmount.greaterThan(0)) {
-          await this.financeService.recordFinancialMovement(prisma, {
-            senderId: actualReceiverBusinessId,
-            receiverId: senderId,
-            amount: paidAmount.toString(),
-            type: 'PAYMENT',
-            orderId: order.id,
-            currency,
-            dueDate: dueDate ?? undefined,
-            note: isCash
-              ? `سداد فوري للفاتورة النقدية رقم ${orderNumber}`
-              : `دفعة مقدية للفاتورة رقم ${orderNumber}`,
-            connectionId: connection.id,
-          });
-        }
 
         // Send push notification for issued sales invoice
         await this.notificationsService.sendPushNotification(
@@ -397,28 +383,19 @@ export class OrdersService {
 
         const connection = await this.resolveAcceptedConnection(sellerId, buyerId, 'CUSTOMER');
         if (connection) {
-          if (!totalDiff.isZero()) {
-            const isIncrease = totalDiff.greaterThan(0);
+          const oldRemaining = order.isCash ? new Decimal(0) : Decimal.max(0, oldTotal.minus(oldPaid));
+          const newRemaining = order.isCash ? new Decimal(0) : Decimal.max(0, newTotal.minus(paidAmount));
+          const remainingDiff = newRemaining.minus(oldRemaining);
+
+          if (!remainingDiff.isZero()) {
+            const isIncrease = remainingDiff.greaterThan(0);
             await this.financeService.recordFinancialMovement(prisma, {
-              senderId: sellerId,
-              receiverId: buyerId,
-              amount: totalDiff.abs().toString(),
+              senderId: isIncrease ? sellerId : buyerId,
+              receiverId: isIncrease ? buyerId : sellerId,
+              amount: remainingDiff.abs().toString(),
               type: isIncrease ? 'SALE' : 'ADJUSTMENT',
               orderId,
               note: `تعديل قيمة الفاتورة رقم ${order.orderNumber}`,
-              connectionId: connection.id,
-              accountRole: 'CUSTOMER',
-            });
-          }
-
-          if (!paidDiff.isZero()) {
-            await this.financeService.recordFinancialMovement(prisma, {
-              senderId: buyerId,
-              receiverId: sellerId,
-              amount: paidDiff.abs().toString(),
-              type: 'PAYMENT',
-              orderId,
-              note: `تعديل السداد للفاتورة رقم ${order.orderNumber}`,
               connectionId: connection.id,
               accountRole: 'CUSTOMER',
             });
@@ -553,30 +530,17 @@ export class OrdersService {
             orderId: order.id,
             currency: order.currency,
             dueDate: order.dueDate ?? undefined,
-            note: order.isCash ? `فاتورة نقدية #${order.orderNumber}` : `فاتورة آجل #${order.orderNumber}`,
+            note: order.isCash
+              ? `فاتورة نقدية #${order.orderNumber}`
+              : (new Decimal((order as any).paidAmount || '0').greaterThan(0)
+                  ? `فاتورة جزئية #${order.orderNumber}`
+                  : `فاتورة آجل #${order.orderNumber}`),
             connectionId: connection!.id,
             accountRole: 'CUSTOMER',
           });
 
           invoiceId = movement.transaction.id;
           invoiceNumber = movement.transaction.voucherNumber;
-
-          // Record payment for cash orders or partial paidAmount - Paid by Buyer (order.senderId) to Seller (order.receiverId)
-          const paidAmount = order.isCash ? new Decimal(order.total as any) : new Decimal((order as any).paidAmount || '0');
-          if (paidAmount.greaterThan(0)) {
-            await this.financeService.recordFinancialMovement(prisma, {
-              senderId: order.senderId,
-              receiverId: order.receiverId,
-              amount: paidAmount.toString(),
-              type: 'PAYMENT',
-              orderId: order.id,
-              currency: order.currency,
-              dueDate: order.dueDate ?? undefined,
-              note: order.isCash ? `سداد فوري للفاتورة النقدية #${order.orderNumber}` : `سداد جزئي للفاتورة الآجلة #${order.orderNumber}`,
-              connectionId: connection!.id,
-              accountRole: 'CUSTOMER',
-            });
-          }
         }
 
         // Link invoiceId to order

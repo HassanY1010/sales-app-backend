@@ -120,7 +120,7 @@ describe('FinanceService ledger movements', () => {
     });
     expect(tx.account.update).toHaveBeenLastCalledWith({
       where: { id: accountId },
-      data: { totalCredit: '100.5', totalDebit: '0' },
+      data: { totalCredit: '0', totalDebit: '100.5' },
     });
   });
 
@@ -137,7 +137,7 @@ describe('FinanceService ledger movements', () => {
     expect(getBalance().toString()).toBe('-140');
     expect(tx.account.update).toHaveBeenLastCalledWith({
       where: { id: accountId },
-      data: { totalCredit: '0', totalDebit: '140' },
+      data: { totalCredit: '140', totalDebit: '0' },
     });
   });
 
@@ -154,7 +154,7 @@ describe('FinanceService ledger movements', () => {
     expect(getBalance().toString()).toBe('75');
     expect(tx.account.update).toHaveBeenLastCalledWith({
       where: { id: accountId },
-      data: { totalCredit: '75', totalDebit: '0' },
+      data: { totalCredit: '0', totalDebit: '75' },
     });
   });
 
@@ -176,7 +176,7 @@ describe('FinanceService ledger movements', () => {
   it('rebuilds account balance from ledger entries', async () => {
     prisma.account.findUnique.mockResolvedValue({
       id: accountId,
-      connection: { requesterId, receiverId },
+      connection: { requesterId, receiverId, connectionType: 'CUSTOMER' },
     });
     prisma.transaction.findMany.mockResolvedValue([
       {
@@ -206,8 +206,8 @@ describe('FinanceService ledger movements', () => {
       where: { id: accountId },
       data: {
         balance: '60',
-        totalCredit: '60',
-        totalDebit: '0',
+        totalCredit: '0',
+        totalDebit: '60',
       },
     });
   });

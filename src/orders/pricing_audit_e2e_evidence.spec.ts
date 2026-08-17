@@ -18,6 +18,8 @@ describe('Strict Pricing Audit & E2E Evidence Verification', () => {
     orderItems: new Map<string, any>(),
     transactions: new Map<string, any>(),
     invoiceSeq: 2000,
+    orderSeq: 0,
+    itemSeq: 0,
   };
 
   const mockPrisma: any = {
@@ -69,9 +71,9 @@ describe('Strict Pricing Audit & E2E Evidence Verification', () => {
     },
     order: {
       create: jest.fn(async ({ data }) => {
-        const id = `ord_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        const id = `ord_${++store.orderSeq}`;
         const items = (data.items?.create || []).map((it: any) => {
-          const itemId = `item_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+          const itemId = `item_${++store.itemSeq}`;
           const itemObj = { id: itemId, orderId: id, ...it };
           store.orderItems.set(itemId, itemObj);
           return itemObj;

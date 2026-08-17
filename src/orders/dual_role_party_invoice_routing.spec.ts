@@ -270,7 +270,7 @@ describe('Dual-Role Party Invoice Routing & Account Separation', () => {
 
     // Customer Account balance remains 0 net (since it was paid in cash), transactions were recorded under customer connection
     const txns = Array.from(store.transactions.values()).filter((t) => t.orderId === order.id);
-    expect(txns.length).toBe(2); // SALE + PAYMENT
+    expect(txns.length).toBe(1); // SALE only (Zero duplicate PAYMENT)
     for (const t of txns) {
       expect(t.connectionId).toBe('conn_customer_101'); // ONLY Customer Connection!
     }
