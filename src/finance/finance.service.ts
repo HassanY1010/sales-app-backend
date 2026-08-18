@@ -45,15 +45,19 @@ export class FinanceService {
       connectionId?: string;
       accountRole?: 'CUSTOMER' | 'SUPPLIER';
       clientId?: string; // Device-generated UUID for idempotency
+      initiatorBusinessId?: string; // The caller/creator business ID
     },
   ) {
-    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId, accountRole } =
+    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId, accountRole, initiatorBusinessId } =
       params;
     const decimalAmount = new Decimal(amount.toString());
 
     if (senderId === receiverId) {
       throw new BadRequestException('Cannot transact within the same business');
     }
+
+    const initiator = initiatorBusinessId || senderId;
+    const counterpart = (initiator === senderId) ? receiverId : senderId;
 
     const expectedRole = accountRole || (type === 'SALE' ? 'CUSTOMER' : type === 'PURCHASE' ? 'SUPPLIER' : undefined);
     const allowedStatuses = ['ACCEPTED', 'ACTIVE', 'accepted', 'active'];
@@ -72,54 +76,54 @@ export class FinanceService {
         (connection.requesterId === receiverId && connection.receiverId === senderId);
       
       if (!isParty) {
-        // Check if receiverId was userId
-        const receiverBiz = await tx.business.findFirst({
-          where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+        // Check if receiverId or senderId was userId
+        const counterpartBiz = await tx.business.findFirst({
+          where: { OR: [{ id: counterpart }, { userId: counterpart }] },
           select: { id: true },
         });
-        const actualBizId = receiverBiz?.id || receiverId;
+        const actualCounterpartBizId = counterpartBiz?.id || counterpart;
         const isPartyWithBiz =
-          (connection.requesterId === senderId && connection.receiverId === actualBizId) ||
-          (connection.requesterId === actualBizId && connection.receiverId === senderId);
+          (connection.requesterId === initiator && connection.receiverId === actualCounterpartBizId) ||
+          (connection.requesterId === actualCounterpartBizId && connection.receiverId === initiator);
 
         if (!isPartyWithBiz) {
           throw new BadRequestException('الارتباط المحدد لا يخص أطراف هذه المعاملة');
         }
       }
 
-      const senderPerspectiveRole =
-        connection.requesterId === senderId
+      const initiatorPerspectiveRole =
+        connection.requesterId === initiator
           ? connection.connectionType
           : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
 
-      if (expectedRole && senderPerspectiveRole !== expectedRole) {
+      if (expectedRole && initiatorPerspectiveRole !== expectedRole) {
         if (type === 'SALE') {
           throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
         }
         if (type === 'PURCHASE') {
           throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
         }
-        throw new BadRequestException(`نوع الارتباط (${senderPerspectiveRole}) لا يتطابق مع الدور المطلوب (${expectedRole})`);
+        throw new BadRequestException(`نوع الارتباط (${initiatorPerspectiveRole}) لا يتطابق مع الدور المطلوب (${expectedRole})`);
       }
     }
 
     if (!connection) {
-      // 1. Check direct connection by business IDs with strict role separation
+      // 1. Check direct connection by initiator & counterpart with strict role separation
       const orClauses: any[] = [];
       if (expectedRole === 'CUSTOMER') {
         orClauses.push(
-          { requesterId: senderId, receiverId: receiverId, connectionType: 'CUSTOMER' },
-          { requesterId: receiverId, receiverId: senderId, connectionType: 'SUPPLIER' },
+          { requesterId: initiator, receiverId: counterpart, connectionType: 'CUSTOMER' },
+          { requesterId: counterpart, receiverId: initiator, connectionType: 'SUPPLIER' },
         );
       } else if (expectedRole === 'SUPPLIER') {
         orClauses.push(
-          { requesterId: senderId, receiverId: receiverId, connectionType: 'SUPPLIER' },
-          { requesterId: receiverId, receiverId: senderId, connectionType: 'CUSTOMER' },
+          { requesterId: initiator, receiverId: counterpart, connectionType: 'SUPPLIER' },
+          { requesterId: counterpart, receiverId: initiator, connectionType: 'CUSTOMER' },
         );
       } else {
         orClauses.push(
-          { requesterId: senderId, receiverId: receiverId },
-          { requesterId: receiverId, receiverId: senderId },
+          { requesterId: initiator, receiverId: counterpart },
+          { requesterId: counterpart, receiverId: initiator },
         );
       }
 
@@ -133,27 +137,27 @@ export class FinanceService {
     }
 
     if (!connection) {
-      // 2. Check if receiverId is user.id
-      const receiverBiz = await tx.business.findFirst({
-        where: { OR: [{ id: receiverId }, { userId: receiverId }] },
+      // 2. Check if counterpart is user.id
+      const counterpartBiz = await tx.business.findFirst({
+        where: { OR: [{ id: counterpart }, { userId: counterpart }] },
         select: { id: true },
       });
-      if (receiverBiz?.id) {
+      if (counterpartBiz?.id) {
         const orClauses: any[] = [];
         if (expectedRole === 'CUSTOMER') {
           orClauses.push(
-            { requesterId: senderId, receiverId: receiverBiz.id, connectionType: 'CUSTOMER' },
-            { requesterId: receiverBiz.id, receiverId: senderId, connectionType: 'SUPPLIER' },
+            { requesterId: initiator, receiverId: counterpartBiz.id, connectionType: 'CUSTOMER' },
+            { requesterId: counterpartBiz.id, receiverId: initiator, connectionType: 'SUPPLIER' },
           );
         } else if (expectedRole === 'SUPPLIER') {
           orClauses.push(
-            { requesterId: senderId, receiverId: receiverBiz.id, connectionType: 'SUPPLIER' },
-            { requesterId: receiverBiz.id, receiverId: senderId, connectionType: 'CUSTOMER' },
+            { requesterId: initiator, receiverId: counterpartBiz.id, connectionType: 'SUPPLIER' },
+            { requesterId: counterpartBiz.id, receiverId: initiator, connectionType: 'CUSTOMER' },
           );
         } else {
           orClauses.push(
-            { requesterId: senderId, receiverId: receiverBiz.id },
-            { requesterId: receiverBiz.id, receiverId: senderId },
+            { requesterId: initiator, receiverId: counterpartBiz.id },
+            { requesterId: counterpartBiz.id, receiverId: initiator },
           );
         }
 
@@ -198,15 +202,15 @@ export class FinanceService {
       );
     }
 
-    const senderPerspectiveRole =
-      connection.requesterId === senderId
+    const initiatorPerspectiveRole =
+      connection.requesterId === initiator
         ? connection.connectionType
         : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
 
-    if (type === 'SALE' && senderPerspectiveRole === 'SUPPLIER') {
+    if (type === 'SALE' && initiatorPerspectiveRole === 'SUPPLIER') {
       throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
     }
-    if (type === 'PURCHASE' && senderPerspectiveRole === 'CUSTOMER') {
+    if (type === 'PURCHASE' && initiatorPerspectiveRole === 'CUSTOMER') {
       throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
     }
 
@@ -240,19 +244,19 @@ export class FinanceService {
 
     switch (type) {
       case 'SALE':
-        // For Customer account, a Sale increases customer debt (+netImpactAmount). For Supplier, it's a return (-netImpactAmount).
-        balanceChange = isCustomer ? netImpactAmount : netImpactAmount.negated();
+        // A Sale (credit invoice) increases buyer's debt / supplier's credit (+netImpactAmount). Cash invoice has netImpactAmount = 0 (+0).
+        balanceChange = netImpactAmount;
         break;
       case 'PURCHASE':
-        // For Supplier account, a Purchase increases supplier credit (+netImpactAmount). For Customer, it's a return (-netImpactAmount).
-        balanceChange = isCustomer ? netImpactAmount.negated() : netImpactAmount;
+        // A Purchase (credit purchase) increases buyer's debt / supplier's credit (+netImpactAmount). Cash purchase has netImpactAmount = 0 (+0).
+        balanceChange = netImpactAmount;
         break;
       case 'PAYMENT':
         // Payment reduces balance (-amount)
         balanceChange = decimalAmount.negated();
         break;
       case 'ADJUSTMENT':
-        if (params.note?.includes('افتتاحي')) {
+        if (params.note?.includes('افتتاحي') || params.note?.includes('تسوية')) {
           balanceChange = decimalAmount;
         } else {
           balanceChange = isSenderRequester ? decimalAmount : decimalAmount.negated();

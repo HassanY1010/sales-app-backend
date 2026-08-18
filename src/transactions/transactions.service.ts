@@ -37,39 +37,53 @@ export class TransactionsService {
     }
 
     // Perform atomic transaction wrapping the movement
-    return this.prisma.$transaction(async (tx) => {
-      const { transaction } = await this.financeService.recordFinancialMovement(
-        tx,
-        {
-          senderId: actualSenderId,
-          receiverId: actualReceiverId,
-          amount: dto.amount,
-          type: dto.transactionType as any,
-          orderId: dto.orderId,
-          note: dto.note,
-          voucherNumber: dto.voucherNumber,
-          currency: dto.currency,
-          dueDate: dto.dueDate,
-          attachmentUrl: dto.attachmentUrl,
-          connectionId: dto.connectionId,
-          accountRole: dto.accountRole,
-          clientId: dto.clientId, // Pass through for storage
-        },
-      );
-
-      // Persist payment-method metadata if provided
-      if (dto['paymentMethod'] || dto['transferNumber']) {
-        await tx.transaction.update({
-          where: { id: transaction.id },
-          data: {
-            paymentMethod: (dto as any).paymentMethod ?? undefined,
-            transferNumber: (dto as any).transferNumber ?? undefined,
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const { transaction } = await this.financeService.recordFinancialMovement(
+          tx,
+          {
+            senderId: actualSenderId,
+            receiverId: actualReceiverId,
+            amount: dto.amount,
+            type: dto.transactionType as any,
+            orderId: dto.orderId,
+            note: dto.note,
+            voucherNumber: dto.voucherNumber,
+            currency: dto.currency,
+            dueDate: dto.dueDate,
+            attachmentUrl: dto.attachmentUrl,
+            connectionId: dto.connectionId,
+            accountRole: dto.accountRole,
+            clientId: dto.clientId, // Pass through for storage
+            initiatorBusinessId: senderId,
           },
-        });
-      }
+        );
 
-      return transaction;
-    }, { timeout: 30000 });
+        // Persist payment-method metadata if provided
+        if (dto['paymentMethod'] || dto['transferNumber']) {
+          await tx.transaction.update({
+            where: { id: transaction.id },
+            data: {
+              paymentMethod: (dto as any).paymentMethod ?? undefined,
+              transferNumber: (dto as any).transferNumber ?? undefined,
+            },
+          });
+        }
+
+        return transaction;
+      }, { timeout: 30000 });
+    } catch (error: any) {
+      if (dto.clientId && (error.code === 'P2002' || error.message?.includes('Unique constraint') || error.message?.includes('clientId'))) {
+        const existing = await this.prisma.transaction.findUnique({
+          where: { clientId: dto.clientId },
+          include: { sender: true, receiver: true, order: true },
+        });
+        if (existing) {
+          return existing;
+        }
+      }
+      throw error;
+    }
   }
 
 

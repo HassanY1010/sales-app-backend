@@ -188,7 +188,7 @@ export class NotificationsService {
           payload.route = `/receipt-vouchers/${entId}`;
           break;
         case 'link_request':
-          payload.route = entId ? `/connections?requestId=${entId}` : `/connections`;
+          payload.route = entId ? `/connection-request/${entId}` : `/connection-requests`;
           break;
         case 'customer':
           payload.route = `/customers/${entId}`;
