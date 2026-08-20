@@ -83,9 +83,26 @@ export class ConnectionsService {
         if (numBalance < 0) totalDebit = Math.abs(numBalance);
       }
 
+      let numOpeningBalance = new Decimal(account.openingBalance as any || 0).toNumber();
+      if (numOpeningBalance === 0) {
+        if (plainConnection.pendingOpenBalance) {
+          numOpeningBalance = new Decimal(plainConnection.pendingOpenBalance as any).toNumber();
+        } else if (Array.isArray(plainConnection.transactions)) {
+          const opTx = plainConnection.transactions.find((t: any) =>
+            t.transactionType === 'ADJUSTMENT' && (t.note?.includes('افتتاحي') || t.type === 'OPENING_BALANCE')
+          );
+          if (opTx) {
+            numOpeningBalance = new Decimal(opTx.amount as any || 0).toNumber();
+          }
+        }
+      }
+      const numCreditLimit = new Decimal(account.creditLimit as any || 0).toNumber();
+
       account = {
         ...account,
         balance: numBalance,
+        openingBalance: numOpeningBalance,
+        creditLimit: numCreditLimit,
         totalDebit,
         totalCredit,
       };
@@ -94,6 +111,9 @@ export class ConnectionsService {
     const result: any = {
       ...plainConnection,
       account,
+      openingBalance: account?.openingBalance ?? Number(plainConnection.pendingOpenBalance ?? 0),
+      creditLimit: account?.creditLimit ?? Number(plainConnection.pendingCreditLimit ?? 100000),
+      balance: account?.balance ?? 0,
       connectionType: effectiveType,
       direction: isRequester ? 'SENT' : 'RECEIVED',
     };
@@ -362,11 +382,13 @@ export class ConnectionsService {
                   creditLimit,
                   billingCycle,
                   dueDate,
+                  ...(openingBalance !== 0 && { openingBalance }),
                 },
               }
             : {
                 create: {
                   balance: 0,
+                  openingBalance,
                   totalCredit: 0,
                   totalDebit: 0,
                   creditLimit,
@@ -900,6 +922,7 @@ export class ConnectionsService {
         account: {
           create: {
             balance: initialBalance,
+            openingBalance: initialBalance,
             totalCredit,
             totalDebit,
             creditLimit: accountCreditLimit,
@@ -998,6 +1021,9 @@ export class ConnectionsService {
           }),
           ...(terms.dueDate !== undefined && {
             dueDate: terms.dueDate ? new Date(terms.dueDate) : null,
+          }),
+          ...(terms.openingBalance !== undefined && {
+            openingBalance: terms.openingBalance,
           }),
         },
       });

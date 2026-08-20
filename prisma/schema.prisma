@@ -138,6 +138,7 @@ model Account {
   id           String     @id @default(uuid())
   connectionId String     @unique
   balance      Decimal    @default(0.00) @db.Decimal(15, 2)
+  openingBalance Decimal  @default(0.00) @db.Decimal(15, 2)
   totalCredit  Decimal    @default(0.00) @db.Decimal(15, 2)
   totalDebit   Decimal    @default(0.00) @db.Decimal(15, 2)
   creditLimit  Decimal    @default(100000) @db.Decimal(15, 2)
