@@ -945,6 +945,7 @@ export class ConnectionsService {
           amount: Math.abs(initialBalance),
           senderId: myBusinessId,
           receiverId: targetBusiness.id,
+          connectionId: created.id,
           note: `رصيد افتتاحي: ${initialBalance}`,
         },
       });
@@ -1030,30 +1031,41 @@ export class ConnectionsService {
 
       if (terms.openingBalance !== undefined) {
         const openingVal = terms.openingBalance;
-        // Find existing opening balance transaction
-        const existingAdjustment = await tx.transaction.findFirst({
+        // Find existing opening balance transaction(s) for this specific connection
+        const existingAdjustments = await tx.transaction.findMany({
           where: {
+            connectionId: connection.id,
             transactionType: 'ADJUSTMENT',
-            note: { startsWith: 'رصيد افتتاحي' },
-            OR: [
-              { senderId: connection.requesterId, receiverId: connection.receiverId! },
-              { senderId: connection.receiverId!, receiverId: connection.requesterId },
-            ],
+            note: { contains: 'افتتاحي' },
           },
+          orderBy: { createdAt: 'asc' },
         });
 
         if (openingVal === 0) {
-          if (existingAdjustment) {
-            await tx.transaction.delete({ where: { id: existingAdjustment.id } });
+          // If setting to 0, delete all opening balance adjustments for this connection
+          if (existingAdjustments.length > 0) {
+            if (tx.transaction.deleteMany) {
+              await tx.transaction.deleteMany({
+                where: {
+                  id: { in: existingAdjustments.map((a) => a.id) },
+                },
+              });
+            } else {
+              for (const adj of existingAdjustments) {
+                await tx.transaction.delete({ where: { id: adj.id } });
+              }
+            }
           }
         } else {
           const senderId = connection.requesterId;
           const targetReceiverId = connection.receiverId!;
           const amount = Math.abs(openingVal);
 
-          if (existingAdjustment) {
+          if (existingAdjustments.length > 0) {
+            // Keep the first/canonical one, update it
+            const canonical = existingAdjustments[0];
             await tx.transaction.update({
-              where: { id: existingAdjustment.id },
+              where: { id: canonical.id },
               data: {
                 amount,
                 senderId,
@@ -1062,7 +1074,22 @@ export class ConnectionsService {
                 connectionId: connection.id,
               },
             });
+
+            // If there were any duplicates, clean them up inside this tx
+            if (existingAdjustments.length > 1) {
+              const extraAdjustments = existingAdjustments.slice(1);
+              if (tx.transaction.deleteMany) {
+                await tx.transaction.deleteMany({
+                  where: { id: { in: extraAdjustments.map((a) => a.id) } },
+                });
+              } else {
+                for (const extra of extraAdjustments) {
+                  await tx.transaction.delete({ where: { id: extra.id } });
+                }
+              }
+            }
           } else {
+            // Create a single canonical opening balance transaction
             await tx.transaction.create({
               data: {
                 transactionType: 'ADJUSTMENT',

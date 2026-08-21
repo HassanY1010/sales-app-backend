@@ -124,7 +124,16 @@ describe('Opening Balance vs Current Balance vs Credit Limit Separation Spec', (
       }),
     },
     transaction: {
-      findMany: jest.fn(async () => dbTransactions),
+      findMany: jest.fn(async ({ where }: any = {}) => {
+        if (!where) return dbTransactions;
+        return dbTransactions.filter((t) => {
+          if (where.connectionId && t.connectionId !== where.connectionId) return false;
+          if (where.transactionType && t.transactionType !== where.transactionType) return false;
+          if (where.note?.contains && !t.note?.includes(where.note.contains)) return false;
+          if (where.note?.startsWith && !t.note?.startsWith(where.note.startsWith)) return false;
+          return true;
+        });
+      }),
       findFirst: jest.fn(async ({ where }: any) => {
         return dbTransactions.find((t) => {
           if (where.transactionType && t.transactionType !== where.transactionType) return false;

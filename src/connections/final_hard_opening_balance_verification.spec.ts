@@ -146,11 +146,28 @@ describe('FINAL HARD OPENING BALANCE VERIFICATION & AUDIT', () => {
           return false;
         }) || null;
       }),
-      findMany: jest.fn(async () => {
-        return dbTransactions.map((t) => ({
-          ...t,
-          order: dbOrders.find((o) => o.id === t.orderId) || null,
-        }));
+      findMany: jest.fn(async ({ where }: any = {}) => {
+        return dbTransactions
+          .filter((t) => {
+            if (!where) return true;
+            if (where.OR) {
+              const matched = where.OR.some((cond: any) => {
+                if (cond.connectionId && t.connectionId === cond.connectionId) return true;
+                if (cond.connectionId === null && t.connectionId === null) return true;
+                return false;
+              });
+              if (!matched) return false;
+            }
+            if (where.connectionId && t.connectionId !== where.connectionId) return false;
+            if (where.transactionType && t.transactionType !== where.transactionType) return false;
+            if (where.note?.contains && !t.note?.includes(where.note.contains)) return false;
+            if (where.note?.startsWith && !t.note?.startsWith(where.note.startsWith)) return false;
+            return true;
+          })
+          .map((t) => ({
+            ...t,
+            order: dbOrders.find((o) => o.id === t.orderId) || null,
+          }));
       }),
       create: jest.fn(async ({ data }: any) => {
         const newTxn = { id: `txn_${++seq}`, createdAt: new Date(), ...data };
