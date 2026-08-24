@@ -8,6 +8,7 @@ import { Decimal } from 'decimal.js';
 import { PrismaService } from '../database/prisma.service';
 import { FinanceService } from '../finance/finance.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EventsGateway } from '../events/events.gateway';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { CreateAdjustmentRequestDto } from './dto/create-adjustment-request.dto';
 
@@ -28,6 +29,7 @@ export class AdjustmentRequestsService {
     private readonly prisma: PrismaService,
     private readonly financeService: FinanceService,
     private readonly notificationsService: NotificationsService,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   async create(
@@ -58,8 +60,8 @@ export class AdjustmentRequestsService {
             itemId: item.id,
             itemName: item.itemName,
             quantity: item.quantity,
-            unitPrice: item.unitPrice.toString(),
-            total: item.total.toString(),
+            unitPrice: (item.unitPrice ?? 0).toString(),
+            total: ((item as any).total ?? (item as any).totalPrice ?? (new Decimal(item.unitPrice as any).times(item.quantity))).toString(),
           }))
         );
       }
@@ -275,18 +277,24 @@ export class AdjustmentRequestsService {
           // 2a. Update order items if requestedData is provided
           if (request.requestedData) {
             try {
-              const items = JSON.parse(request.requestedData);
+              const parsed = JSON.parse(request.requestedData);
+              const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.items) ? parsed.items : null);
               if (Array.isArray(items)) {
                 for (const item of items) {
-                  if (item.itemId) {
+                  const itemId = item.id || item.itemId;
+                  if (itemId) {
+                    const qty = Number(item.quantity || 1);
+                    const unitPrice = item.unitPrice?.toString() || '0';
+                    const itemTotal = new Decimal(qty).times(new Decimal(unitPrice)).toString();
                     await tx.orderItem.update({
-                      where: { id: item.itemId },
+                      where: { id: itemId },
                       data: {
                         itemName: item.itemName,
-                        quantity: Number(item.quantity || 1),
-                        unitPrice: item.unitPrice,
-                        total: new Decimal(item.quantity || '1').times(new Decimal(item.unitPrice || '0')).toString(),
-                      },
+                        quantity: qty,
+                        unitPrice: unitPrice,
+                        totalPrice: itemTotal,
+                        total: itemTotal,
+                      } as any,
                     });
                   }
                 }
@@ -298,16 +306,25 @@ export class AdjustmentRequestsService {
           const currentItems = await tx.orderItem.findMany({
             where: { orderId: request.targetId },
           });
-          const newSubtotal = currentItems.reduce(
-            (sum, item) => sum.plus(new Decimal(item.total as any)),
-            new Decimal(0),
-          );
-          const tax = new Decimal(order.tax as any);
-          const discount = new Decimal(order.discount as any);
-          finalAmount = newSubtotal.plus(tax).minus(discount);
+          let newSubtotal = new Decimal(0);
+          if (currentItems.length > 0) {
+            newSubtotal = currentItems.reduce(
+              (sum, item) => sum.plus(new Decimal(((item as any).total ?? (item as any).totalPrice ?? (new Decimal(item.unitPrice as any).times(item.quantity))) as any)),
+              new Decimal(0),
+            );
+            const tax = new Decimal((order.tax ?? '0') as any);
+            const discount = new Decimal((order.discount ?? '0') as any);
+            finalAmount = newSubtotal.plus(tax).minus(discount);
+          } else if (request.requestedAmount) {
+            finalAmount = new Decimal(request.requestedAmount as any);
+            newSubtotal = finalAmount;
+          } else {
+            finalAmount = target.currentAmount;
+            newSubtotal = finalAmount;
+          }
 
           // 2c. payment-status recalculation and balance reconciliation
-          let finalPaid = new Decimal(order.paidAmount as any);
+          let finalPaid = new Decimal((order.paidAmount ?? '0') as any);
           if (finalAmount.lessThan(finalPaid)) {
             finalPaid = finalAmount;
             // Update linked PAYMENT transaction (if any exists for partial payment)
@@ -443,6 +460,17 @@ export class AdjustmentRequestsService {
       },
     });
 
+    this.eventsGateway.emitToBusiness(request.requesterBusinessId, 'ACCOUNT_UPDATED', {
+      targetType: request.targetType,
+      targetId: request.targetId,
+      status: 'APPROVED',
+    });
+    this.eventsGateway.emitToBusiness(request.receiverBusinessId, 'ACCOUNT_UPDATED', {
+      targetType: request.targetType,
+      targetId: request.targetId,
+      status: 'APPROVED',
+    });
+
     return updated;
   }
 
@@ -510,6 +538,17 @@ export class AdjustmentRequestsService {
           entityId: request.targetId,
         },
       },
+    });
+
+    this.eventsGateway.emitToBusiness(request.requesterBusinessId, 'ACCOUNT_UPDATED', {
+      targetType: request.targetType,
+      targetId: request.targetId,
+      status: 'REJECTED',
+    });
+    this.eventsGateway.emitToBusiness(request.receiverBusinessId, 'ACCOUNT_UPDATED', {
+      targetType: request.targetType,
+      targetId: request.targetId,
+      status: 'REJECTED',
     });
 
     return rejected;

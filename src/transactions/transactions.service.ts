@@ -202,6 +202,17 @@ export class TransactionsService {
       );
     }
 
+    // Direct monetary modification guard:
+    // If this transaction links two active parties and amount change is requested, it MUST go through adjustment-requests.
+    if (dto.amount && transaction.senderId && transaction.receiverId && transaction.senderId !== transaction.receiverId) {
+      const isUnchanged = new Decimal(dto.amount).equals(new Decimal(transaction.amount as any));
+      if (!isUnchanged) {
+        throw new BadRequestException(
+          'لا يمكن تعديل مبلغ السند مباشرة عند ارتباطه بطرف آخر. يرجى تقديم طلب تعديل للموافقة المتبادلة.',
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // 2. Compute new amount if provided
       const newAmount = dto.amount
@@ -296,6 +307,12 @@ export class TransactionsService {
     ) {
       throw new ForbiddenException(
         'You do not have access to this transaction',
+      );
+    }
+
+    if (transaction.senderId && transaction.receiverId && transaction.senderId !== transaction.receiverId) {
+      throw new BadRequestException(
+        'لا يمكن حذف السند أو الحركة المالية المشتركة مباشرة. يرجى تقديم طلب تسوية/تعديل للموافقة المتبادلة.',
       );
     }
 

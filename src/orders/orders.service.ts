@@ -321,6 +321,14 @@ export class OrdersService {
       throw new BadRequestException('لا يمكن تعديل أسعار طلبية ملغية أو مرفوضة أو مكتملة');
     }
 
+    // If order is already ISSUED/ACCEPTED with prices visible, direct edit is strictly blocked.
+    // Must use two-way adjustment requests workflow (/adjustment-requests).
+    if (order.pricesVisible && order.status !== 'PENDING') {
+      throw new BadRequestException(
+        'لا يمكن تعديل الفاتورة مباشرة بعد إصدارها واعتماد أسعارها. يرجى إرسال طلب تعديل للموافقة من الطرف الآخر.',
+      );
+    }
+
     const orderItemIds = new Set(order.items.map((i) => i.id));
     for (const dtoItem of dto.items) {
       if (!orderItemIds.has(dtoItem.id)) {
