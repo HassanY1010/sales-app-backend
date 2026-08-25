@@ -500,10 +500,10 @@ export class FinanceService {
 
       switch (t.transactionType) {
         case 'SALE':
-          balance = isCustomer ? balance.plus(amount) : balance.minus(amount);
+          balance = balance.plus(amount);
           break;
         case 'PURCHASE':
-          balance = isCustomer ? balance.minus(amount) : balance.plus(amount);
+          balance = balance.plus(amount);
           break;
         case 'PAYMENT':
           balance = balance.minus(amount);
