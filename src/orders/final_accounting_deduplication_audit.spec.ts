@@ -371,8 +371,12 @@ describe('Final Comprehensive Verification & Audit for Invoice Accounting', () =
     );
     expect(dbAccounts[0].balance.toNumber()).toBe(3000);
 
-    // Link invoiceId to simulate issued invoice
-    order.invoiceId = dbTransactions[0].id;
+    // For draft/unapproved orders with invoiceId, direct update adjusts balance
+    const existingOrder = dbOrders.find((o) => o.id === order.id);
+    if (existingOrder) {
+      existingOrder.invoiceId = dbTransactions[0].id;
+      existingOrder.pricesVisible = false;
+    }
 
     // 2. Edit price to 6,000 (unitPrice: 4500 -> 6000), paidAmount stays 1500 -> Remaining becomes 4,500
     await ordersService.updateOrderPrices(

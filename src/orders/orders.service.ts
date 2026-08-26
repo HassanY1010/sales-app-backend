@@ -321,9 +321,9 @@ export class OrdersService {
       throw new BadRequestException('لا يمكن تعديل أسعار طلبية ملغية أو مرفوضة أو مكتملة');
     }
 
-    // If order is already ISSUED/ACCEPTED with prices visible, direct edit is strictly blocked.
+    // If order is already ACCEPTED/COMPLETED with prices visible, direct edit is strictly blocked.
     // Must use two-way adjustment requests workflow (/adjustment-requests).
-    if (order.pricesVisible && order.status !== 'PENDING') {
+    if (order.pricesVisible && ['ACCEPTED', 'DELIVERED'].includes(order.status)) {
       throw new BadRequestException(
         'لا يمكن تعديل الفاتورة مباشرة بعد إصدارها واعتماد أسعارها. يرجى إرسال طلب تعديل للموافقة من الطرف الآخر.',
       );

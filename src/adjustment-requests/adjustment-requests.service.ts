@@ -42,6 +42,19 @@ export class AdjustmentRequestsService {
       dto.targetType,
       dto.targetId,
     );
+
+    // Prevent duplicate pending requests on the same target
+    const existingPending = await this.prisma.adjustmentRequest.findFirst({
+      where: {
+        targetType: dto.targetType,
+        targetId: dto.targetId,
+        status: 'PENDING',
+      },
+    });
+    if (existingPending) {
+      throw new BadRequestException('يوجد طلب تعديل قيد المراجعة مسبقاً لهذه الفاتورة/السند');
+    }
+
     const receiverBusinessId =
       target.senderId === businessId ? target.receiverId : target.senderId;
 
@@ -303,6 +316,20 @@ export class AdjustmentRequestsService {
           }
 
           // 2b. Recalculate subtotal and final total from current order items
+          let newDiscount = new Decimal((order.discount ?? '0') as any);
+          let newPaidAmount = new Decimal((order.paidAmount ?? '0') as any);
+          if (request.requestedData) {
+            try {
+              const parsed = JSON.parse(request.requestedData);
+              if (parsed.discount !== undefined) {
+                newDiscount = new Decimal(parsed.discount || '0');
+              }
+              if (parsed.paidAmount !== undefined) {
+                newPaidAmount = new Decimal(parsed.paidAmount || '0');
+              }
+            } catch (_) {}
+          }
+
           const currentItems = await tx.orderItem.findMany({
             where: { orderId: request.targetId },
           });
@@ -313,8 +340,7 @@ export class AdjustmentRequestsService {
               new Decimal(0),
             );
             const tax = new Decimal((order.tax ?? '0') as any);
-            const discount = new Decimal((order.discount ?? '0') as any);
-            finalAmount = newSubtotal.plus(tax).minus(discount);
+            finalAmount = newSubtotal.plus(tax).minus(newDiscount);
           } else if (request.requestedAmount) {
             finalAmount = new Decimal(request.requestedAmount as any);
             newSubtotal = finalAmount;
@@ -324,7 +350,7 @@ export class AdjustmentRequestsService {
           }
 
           // 2c. payment-status recalculation and balance reconciliation
-          let finalPaid = new Decimal((order.paidAmount ?? '0') as any);
+          let finalPaid = newPaidAmount;
           if (finalAmount.lessThan(finalPaid)) {
             finalPaid = finalAmount;
             // Update linked PAYMENT transaction (if any exists for partial payment)
@@ -339,24 +365,28 @@ export class AdjustmentRequestsService {
             }
           }
 
-          // 2d. Save updated invoice total and subtotal
+          // 2d. Save updated invoice total, discount, paidAmount and subtotal
           await tx.order.update({
             where: { id: request.targetId },
             data: {
               subtotal: newSubtotal.toString(),
+              discount: newDiscount.toString(),
               total: finalAmount.toString(),
               paidAmount: finalPaid.toString(),
             },
           });
         }
 
-        // 2e. Update the linked SALE transaction's amount to new total
-        const linkedSale = await tx.transaction.findFirst({
-          where: { orderId: request.targetId, transactionType: 'SALE' },
+        // 2e. Update the linked SALE / PURCHASE transaction's amount to new total
+        const linkedTxn = await tx.transaction.findFirst({
+          where: {
+            orderId: request.targetId,
+            transactionType: { in: ['SALE', 'PURCHASE'] },
+          },
         });
-        if (linkedSale) {
+        if (linkedTxn) {
           await tx.transaction.update({
-            where: { id: linkedSale.id },
+            where: { id: linkedTxn.id },
             data: { amount: finalAmount.toString() },
           });
         }

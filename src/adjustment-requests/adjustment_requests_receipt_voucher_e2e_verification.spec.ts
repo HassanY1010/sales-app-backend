@@ -87,6 +87,14 @@ describe('Adjustment Requests Receipt Voucher E2E Integration Audit', () => {
         return req;
       }),
       findUnique: jest.fn(async ({ where }: any) => dbAdjustmentRequests.find((r) => r.id === where.id) || null),
+      findFirst: jest.fn(async ({ where }: any) => {
+        return dbAdjustmentRequests.find((r) => {
+          if (where.targetType && r.targetType !== where.targetType) return false;
+          if (where.targetId && r.targetId !== where.targetId) return false;
+          if (where.status && r.status !== where.status) return false;
+          return true;
+        }) || null;
+      }),
       findMany: jest.fn(async () => dbAdjustmentRequests),
       count: jest.fn(async () => dbAdjustmentRequests.length),
       update: jest.fn(async ({ where, data }: any) => {
