@@ -482,6 +482,7 @@ export class FinanceService {
         ],
       },
       include: { order: true },
+      orderBy: { createdAt: 'asc' },
     });
 
     const isCustomer = (account.connection?.connectionType || 'CUSTOMER').toUpperCase() === 'CUSTOMER';

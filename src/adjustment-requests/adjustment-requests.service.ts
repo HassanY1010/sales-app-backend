@@ -255,6 +255,17 @@ export class AdjustmentRequestsService {
     );
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Re-verify request status inside transaction to guarantee idempotency and prevent race conditions
+      const currentRequest = await tx.adjustmentRequest.findUnique({
+        where: { id },
+      });
+      if (!currentRequest) throw new NotFoundException('Adjustment request not found');
+      if (currentRequest.status !== 'PENDING') {
+        throw new BadRequestException(
+          `Adjustment request is already ${currentRequest.status}`,
+        );
+      }
+
       // 1. Update non-amount metadata (dueDate, note) on the target record
       if (request.requestedDueDate || request.requestedNote) {
         if (request.targetType === 'ORDER') {
@@ -292,22 +303,45 @@ export class AdjustmentRequestsService {
             try {
               const parsed = JSON.parse(request.requestedData);
               const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.items) ? parsed.items : null);
-              if (Array.isArray(items)) {
-                for (const item of items) {
+              if (Array.isArray(items) && items.length > 0) {
+                const existingItems = await tx.orderItem.findMany({
+                  where: { orderId: request.targetId },
+                });
+
+                for (let i = 0; i < items.length; i++) {
+                  const item = items[i];
                   const itemId = item.id || item.itemId;
-                  if (itemId) {
-                    const qty = Number(item.quantity || 1);
-                    const unitPrice = item.unitPrice?.toString() || '0';
-                    const itemTotal = new Decimal(qty).times(new Decimal(unitPrice)).toString();
+                  const qty = Math.max(1, parseInt(item.quantity?.toString() || '1', 10));
+                  const unitPrice = item.unitPrice !== undefined ? item.unitPrice.toString() : '0';
+                  const itemTotal = new Decimal(qty).times(new Decimal(unitPrice)).toString();
+                  const itemName = item.itemName || 'صنف';
+                  const unit = item.unit || undefined;
+
+                  const match = itemId
+                    ? existingItems.find((e) => e.id === itemId)
+                    : (i < existingItems.length ? existingItems[i] : null);
+
+                  if (match) {
                     await tx.orderItem.update({
-                      where: { id: itemId },
+                      where: { id: match.id },
                       data: {
-                        itemName: item.itemName,
+                        itemName,
                         quantity: qty,
-                        unitPrice: unitPrice,
-                        totalPrice: itemTotal,
+                        unitPrice,
                         total: itemTotal,
-                      } as any,
+                        unit,
+                      },
+                    });
+                  } else {
+                    await tx.orderItem.create({
+                      data: {
+                        orderId: request.targetId,
+                        itemName,
+                        quantity: qty,
+                        unitPrice,
+                        total: itemTotal,
+                        unit,
+                      },
                     });
                   }
                 }
@@ -336,7 +370,7 @@ export class AdjustmentRequestsService {
           let newSubtotal = new Decimal(0);
           if (currentItems.length > 0) {
             newSubtotal = currentItems.reduce(
-              (sum, item) => sum.plus(new Decimal(((item as any).total ?? (item as any).totalPrice ?? (new Decimal(item.unitPrice as any).times(item.quantity))) as any)),
+              (sum, item) => sum.plus(new Decimal(item.total.toString())),
               new Decimal(0),
             );
             const tax = new Decimal((order.tax ?? '0') as any);
@@ -421,7 +455,7 @@ export class AdjustmentRequestsService {
             { requesterId: target.senderId, receiverId: target.receiverId },
             { requesterId: target.receiverId, receiverId: target.senderId },
           ],
-          status: 'ACCEPTED',
+          status: { in: ['ACCEPTED', 'ACTIVE', 'accepted', 'active'] },
         },
         include: { account: true },
       });

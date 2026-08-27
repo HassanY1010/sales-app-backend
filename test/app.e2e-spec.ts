@@ -57,19 +57,64 @@ describe('Application smoke and auth boundaries (e2e)', () => {
       .expect('Hello World!');
   });
 
-  it('serves health endpoint with HTTP 200 and expected payload', async () => {
+  it('serves GET /health without Authorization returning HTTP 200', async () => {
     const response = await request(app.getHttpServer())
       .get('/health')
       .expect(200);
 
-    expect(response.body).toEqual({
-      success: true,
-      status: 'ok',
-      service: 'sales-app-backend',
-    });
+    expect(response.body.status).toBe('ok');
+    expect(response.body.service).toBe('sales-app-backend');
+    expect(response.body.timestamp).toBeDefined();
+  });
+
+  it('serves GET /health with Authorization returning HTTP 200', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/health')
+      .set('Authorization', 'Bearer fake-token-test')
+      .expect(200);
+
+    expect(response.body.status).toBe('ok');
+  });
+
+  it('serves GET /health without Cookies returning HTTP 200', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/health')
+      .expect(200);
+
+    expect(response.body.status).toBe('ok');
+  });
+
+  it('serves GET /health with Cookies returning HTTP 200', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/health')
+      .set('Cookie', ['access_token=sample-cookie-token'])
+      .expect(200);
+
+    expect(response.body.status).toBe('ok');
+  });
+
+  it('serves GET /api/v1/health returning HTTP 200', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/health')
+      .expect(200);
+
+    expect(response.body.status).toBe('ok');
+  });
+
+  it('serves GET /ready and verifies database status', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/ready')
+      .expect(200);
+
+    expect(response.body.status).toBe('ok');
+    expect(response.body.database).toBe('connected');
   });
 
   it('blocks protected report endpoints without authentication', () => {
     return request(app.getHttpServer()).get('/reports/summary').expect(401);
+  });
+
+  it('blocks protected users endpoints without authentication', () => {
+    return request(app.getHttpServer()).get('/users/me').expect(401);
   });
 });

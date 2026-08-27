@@ -685,5 +685,58 @@ describe('OrdersService', () => {
       // No financial movements because totalDiff is 0
       expect(mockFinanceService.recordFinancialMovement).not.toHaveBeenCalled();
     });
+
+    it('should include "المورد [اسم المورد]" in push notification sent to customer on direct sales invoice creation', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-supp-cust',
+        requesterId: 'supp-sanaa',
+        receiverId: 'cust-barakah',
+        status: 'ACCEPTED',
+        showPrices: true,
+        account: {
+          id: 'acc-1',
+          totalDebit: new Decimal('0'),
+          creditLimit: new Decimal('100000'),
+          currency: 'YER',
+        },
+      });
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => {
+        if (where.id === 'supp-sanaa') {
+          return { id: 'supp-sanaa', name: 'بقالة صنعاء', user: { id: 'user-supp', userType: 'business' } };
+        }
+        return { id: 'cust-barakah', name: 'سوبرماركت البركة', user: { id: 'user-cust', userType: 'business' } };
+      });
+      mockInvoiceNumberService.getNextInvoiceNumber.mockResolvedValue('INV-9901');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-inv-9901',
+        orderNumber: 'INV-9901',
+        senderId: 'supp-sanaa',
+        receiverId: 'cust-barakah',
+        connectionId: 'conn-supp-cust',
+        status: 'ISSUED',
+        pricesVisible: true,
+        total: '1500',
+        items: [{ id: 'item-1', itemName: 'حده كبيو', quantity: 1, unitPrice: '1500', total: '1500' }],
+      });
+
+      await service.createOrder(
+        'supp-sanaa',
+        {
+          receiverId: 'cust-barakah',
+          isCash: false,
+          notes: 'طلب مبيعات من التطبيق',
+          items: [{ itemName: 'حده كبيو', quantity: 1, unitPrice: '1500', total: '1500' }],
+        } as any,
+        'business',
+      );
+
+      // Verify push notification sent to customer contains "المورد بقالة صنعاء"
+      expect(mockNotificationsService.sendPushNotification).toHaveBeenCalledWith(
+        'user-cust',
+        'فاتورة جديدة',
+        expect.stringContaining('من المورد بقالة صنعاء'),
+        expect.objectContaining({ type: 'NEW_ORDER' }),
+      );
+    });
   });
 });

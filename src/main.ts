@@ -57,7 +57,7 @@ async function bootstrap() {
 
   // 1. API Versioning & Prefix
   app.setGlobalPrefix('api/v1', {
-    exclude: ['/', 'health', 'api/v1/health'],
+    exclude: ['/', 'health', 'api/v1/health', 'ready', 'api/v1/ready'],
   });
 
   // 2. Security Headers

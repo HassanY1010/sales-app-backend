@@ -31,11 +31,18 @@ describe('AppController', () => {
 
   describe('health', () => {
     it('should return health status ok', () => {
-      expect(appController.checkHealth()).toEqual({
-        success: true,
-        status: 'ok',
-        service: 'sales-app-backend',
-      });
+      const result = appController.checkHealth();
+      expect(result.status).toBe('ok');
+      expect(result.service).toBe('sales-app-backend');
+      expect(result.timestamp).toBeDefined();
+    });
+  });
+
+  describe('readiness', () => {
+    it('should return ok when database is connected', async () => {
+      const result = await appController.checkReadiness();
+      expect(result.status).toBe('ok');
+      expect(result.database).toBe('connected');
     });
   });
 });

@@ -90,6 +90,11 @@ describe('Bilateral Consent & Ledger Verification Test Suite (14 Mandatory Test 
           return true;
         });
       }),
+      create: jest.fn(async ({ data }: any) => {
+        const item = { id: `item-${++seq}`, ...data };
+        dbOrderItems.push(item);
+        return item;
+      }),
       update: jest.fn(async ({ where, data }: any) => {
         const item = dbOrderItems.find((i) => i.id === where.id);
         if (item) Object.assign(item, data);
@@ -359,7 +364,7 @@ describe('Bilateral Consent & Ledger Verification Test Suite (14 Mandatory Test 
       orderId: 'order-1',
       unitPrice: '1000',
       quantity: 10,
-      totalPrice: '10000',
+      total: '10000',
     });
     dbTransactions.push({
       id: 'txn-sale-1',
@@ -389,7 +394,7 @@ describe('Bilateral Consent & Ledger Verification Test Suite (14 Mandatory Test 
 
     // Verify order item updated
     expect(dbOrderItems[0].unitPrice).toBe('800');
-    expect(dbOrderItems[0].totalPrice).toBe('8000');
+    expect(dbOrderItems[0].total).toBe('8000');
     // Verify order total updated
     expect(dbOrders[0].total).toBe('8000');
     // Verify linked SALE transaction updated
@@ -566,5 +571,294 @@ describe('Bilateral Consent & Ledger Verification Test Suite (14 Mandatory Test 
       'ACCOUNT_UPDATED',
       expect.objectContaining({ status: 'APPROVED', targetId: 'order-1' }),
     );
+  });
+
+  // 15. TC-15: Transaction failure rolls back all updates atomically
+  it('TC-15: Transaction failure leaves invoice, ledger, balance, and request unchanged (Rollback)', async () => {
+    dbOrders.push({
+      id: 'order-rollback',
+      orderNumber: 'INV-ROLL',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      total: '5000',
+      subtotal: '5000',
+      paidAmount: '0',
+    });
+    dbTransactions.push({
+      id: 'txn-roll',
+      orderId: 'order-rollback',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      amount: '5000',
+      transactionType: 'SALE',
+      accountId: 'acc-1',
+    });
+
+    await financeService.rebuildAccountBalance('acc-1', mockPrisma);
+    expect(dbAccounts[0].balance.toNumber()).toBe(5000);
+
+    const req = await service.create('biz-buyer', 'user-buyer', {
+      targetType: 'ORDER',
+      targetId: 'order-rollback',
+      requestedAmount: '3000',
+      reason: 'تعديل سيتم محاكاة فشله',
+    });
+
+    // Mock an error inside financeService.rebuildAccountBalance
+    const origRebuild = financeService.rebuildAccountBalance;
+    jest.spyOn(financeService, 'rebuildAccountBalance').mockImplementationOnce(async () => {
+      throw new Error('Database connection dropped during ledger rebuild');
+    });
+
+    await expect(service.approve('biz-seller', 'user-seller', req.id)).rejects.toThrow(
+      'Database connection dropped during ledger rebuild',
+    );
+
+    // Request is still PENDING
+    const currentReq = dbAdjustmentRequests.find((r) => r.id === req.id);
+    expect(currentReq.status).toBe('PENDING');
+
+    // Restore spy
+    jest.spyOn(financeService, 'rebuildAccountBalance').mockImplementation(origRebuild);
+  });
+
+  // 16. TC-16: Concurrent double accept is prevented and rejects subsequent calls safely
+  it('TC-16: Calling approve consecutively rejects the second attempt without duplicate effects', async () => {
+    dbOrders.push({
+      id: 'order-double',
+      orderNumber: 'INV-DBL',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      total: '10000',
+      subtotal: '10000',
+    });
+    dbTransactions.push({
+      id: 'txn-double',
+      orderId: 'order-double',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      amount: '10000',
+      transactionType: 'SALE',
+      accountId: 'acc-1',
+    });
+
+    const req = await service.create('biz-buyer', 'user-buyer', {
+      targetType: 'ORDER',
+      targetId: 'order-double',
+      requestedAmount: '7000',
+      reason: 'تخفيض متفق عليه',
+    });
+
+    const first = await service.approve('biz-seller', 'user-seller', req.id);
+    expect(first.status).toBe('APPROVED');
+
+    // Second approve attempt must throw BadRequestException
+    await expect(service.approve('biz-seller', 'user-seller', req.id)).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  // 17. TC-17: Exact Scenario (5,000 -> 10,000 invoice adjustment)
+  it('TC-17: Golden Verification - 5,000 -> 10,000 adjustment updates invoice, ledger and balance to exactly 10,000 without duplication', async () => {
+    dbOrders.push({
+      id: 'order-10025',
+      orderNumber: '10025',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      total: '5000',
+      subtotal: '5000',
+      paidAmount: '0',
+      isCash: false,
+    });
+    dbOrderItems.push({
+      id: 'item-sugar',
+      orderId: 'order-10025',
+      itemName: 'سكر أبيض',
+      unitPrice: '5000',
+      quantity: 1,
+      total: '5000',
+    });
+    dbTransactions.push({
+      id: 'txn-sale-10025',
+      orderId: 'order-10025',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      amount: '5000',
+      transactionType: 'SALE',
+      accountId: 'acc-1',
+    });
+
+    await financeService.rebuildAccountBalance('acc-1', mockPrisma);
+    expect(dbAccounts[0].balance.toNumber()).toBe(5000);
+
+    const req = await service.create('biz-buyer', 'user-buyer', {
+      targetType: 'ORDER',
+      targetId: 'order-10025',
+      requestedAmount: '10000',
+      reason: 'الكمية 2 بدل واحد',
+      requestedData: JSON.stringify({
+        items: [{ id: 'item-sugar', itemName: 'سكر أبيض', unitPrice: '5000', quantity: 2 }],
+      }),
+    });
+
+    expect(req.status).toBe('PENDING');
+    // Balance and Invoice MUST remain 5,000 while PENDING
+    expect(dbOrders.find((o) => o.id === 'order-10025').total).toBe('5000');
+    expect(dbAccounts[0].balance.toNumber()).toBe(5000);
+
+    const approved = await service.approve('biz-seller', 'user-seller', req.id);
+    expect(approved.status).toBe('APPROVED');
+
+    // 1. Invoice total becomes 10,000
+    const updatedOrder = dbOrders.find((o) => o.id === 'order-10025');
+    expect(updatedOrder.total).toBe('10000');
+    expect(updatedOrder.subtotal).toBe('10000');
+
+    // 2. OrderItem quantity = 2, total = 10,000
+    const updatedItem = dbOrderItems.find((i) => i.id === 'item-sugar');
+    expect(updatedItem.quantity).toBe(2);
+    expect(updatedItem.total).toBe('10000');
+
+    // 3. Linked SALE transaction updated to 10,000
+    const linkedTxn = dbTransactions.find((t) => t.id === 'txn-sale-10025');
+    expect(linkedTxn.amount).toBe('10000');
+
+    // 4. Ledger transactions count is STILL 1 (no duplicate phantom rows)
+    expect(dbTransactions.filter((t) => t.orderId === 'order-10025').length).toBe(1);
+
+    // 5. Customer Balance is exactly 10,000 (NOT 15,000)
+    expect(dbAccounts[0].balance.toNumber()).toBe(10000);
+    expect(dbAccounts[0].totalDebit.toNumber()).toBe(10000);
+    expect(dbAccounts[0].totalCredit.toNumber()).toBe(0);
+  });
+
+  // 18. TC-18: Real Financial Scenario with Previous Payment (Invoice: 5,000, Paid: 2,000 -> New: 10,000 -> Accept -> Balance: 8,000)
+  it('TC-18: Real scenario with previous payment (5,000 invoice, 2,000 paid -> adjust 10,000 -> accept -> remaining balance 8,000)', async () => {
+    dbOrders.push({
+      id: 'order-pay-1',
+      orderNumber: 'INV-PAY-01',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      total: '5000',
+      subtotal: '5000',
+      paidAmount: '0',
+      isCash: false,
+    });
+    dbOrderItems.push({
+      id: 'item-pay-1',
+      orderId: 'order-pay-1',
+      itemName: 'منتج أولي',
+      unitPrice: '5000',
+      quantity: 1,
+      total: '5000',
+    });
+    // 1. Initial Sale Transaction
+    dbTransactions.push({
+      id: 'txn-sale-pay-1',
+      orderId: 'order-pay-1',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      amount: '5000',
+      transactionType: 'SALE',
+      accountId: 'acc-1',
+    });
+    // 2. Initial Payment Receipt Voucher
+    dbTransactions.push({
+      id: 'txn-rec-pay-1',
+      senderId: 'biz-buyer',
+      receiverId: 'biz-seller',
+      amount: '2000',
+      transactionType: 'PAYMENT',
+      accountId: 'acc-1',
+    });
+
+    // Rebuild initial balance: Sale (5,000) - Payment (2,000) -> Balance 3,000
+    await financeService.rebuildAccountBalance('acc-1', mockPrisma);
+    expect(dbAccounts[0].balance.toNumber()).toBe(3000);
+    expect(dbAccounts[0].totalDebit.toNumber()).toBe(3000);
+    expect(dbAccounts[0].totalCredit.toNumber()).toBe(0);
+
+    const req = await service.create('biz-buyer', 'user-buyer', {
+      targetType: 'ORDER',
+      targetId: 'order-pay-1',
+      requestedAmount: '10000',
+      reason: 'تعديل الكمية إلى 2',
+      requestedData: JSON.stringify({
+        items: [{ id: 'item-pay-1', itemName: 'منتج أولي', unitPrice: '5000', quantity: 2 }],
+      }),
+    });
+
+    // Accept Adjustment
+    const approved = await service.approve('biz-seller', 'user-seller', req.id);
+    expect(approved.status).toBe('APPROVED');
+
+    // 1. Invoice Total updated to 10,000
+    const updatedOrder = dbOrders.find((o) => o.id === 'order-pay-1');
+    expect(updatedOrder.total).toBe('10000');
+
+    // 2. Account Statement contains exactly 2 transactions (Sale 10,000 + Payment 2,000) - NO duplicates
+    const accountTxns = dbTransactions.filter((t) => t.accountId === 'acc-1');
+    expect(accountTxns.length).toBe(2);
+
+    // 3. Customer Balance is exactly 8,000 (Sale 10,000 - Payment 2,000)
+    expect(dbAccounts[0].balance.toNumber()).toBe(8000);
+    expect(dbAccounts[0].totalDebit.toNumber()).toBe(8000);
+    expect(dbAccounts[0].totalCredit.toNumber()).toBe(0);
+  });
+
+  // 19. TC-19: Real Scenario with Previous Payment - Reject maintains exact 3,000 balance
+  it('TC-19: Real scenario with previous payment - Reject maintains Invoice 5,000, Paid 2,000, Balance 3,000 with zero financial effect', async () => {
+    dbOrders.push({
+      id: 'order-pay-rej',
+      orderNumber: 'INV-PAY-REJ',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      total: '5000',
+      subtotal: '5000',
+      paidAmount: '0',
+    });
+    dbTransactions.push({
+      id: 'txn-sale-pay-rej',
+      orderId: 'order-pay-rej',
+      senderId: 'biz-seller',
+      receiverId: 'biz-buyer',
+      amount: '5000',
+      transactionType: 'SALE',
+      accountId: 'acc-1',
+    });
+    dbTransactions.push({
+      id: 'txn-rec-pay-rej',
+      senderId: 'biz-buyer',
+      receiverId: 'biz-seller',
+      amount: '2000',
+      transactionType: 'PAYMENT',
+      accountId: 'acc-1',
+    });
+
+    await financeService.rebuildAccountBalance('acc-1', mockPrisma);
+    expect(dbAccounts[0].balance.toNumber()).toBe(3000);
+
+    const req = await service.create('biz-buyer', 'user-buyer', {
+      targetType: 'ORDER',
+      targetId: 'order-pay-rej',
+      requestedAmount: '10000',
+      reason: 'طلب تعديل مرفوض',
+    });
+
+    const rejected = await service.reject('biz-seller', 'user-seller', req.id, 'غير موافق على زيادة الكمية');
+    expect(rejected.status).toBe('REJECTED');
+    expect(rejected.rejectionReason).toBe('غير موافق على زيادة الكمية');
+
+    // 1. Invoice unchanged
+    const order = dbOrders.find((o) => o.id === 'order-pay-rej');
+    expect(order.total).toBe('5000');
+
+    // 2. Ledger unchanged (2 rows: Sale 5,000 + Payment 2,000)
+    expect(dbTransactions.length).toBe(2);
+
+    // 3. Balance unchanged at exactly 3,000
+    expect(dbAccounts[0].balance.toNumber()).toBe(3000);
+    expect(dbAccounts[0].totalDebit.toNumber()).toBe(3000);
+    expect(dbAccounts[0].totalCredit.toNumber()).toBe(0);
   });
 });

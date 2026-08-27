@@ -204,7 +204,7 @@ export class OrdersService {
         await this.notificationsService.sendPushNotification(
           receiverBusiness.user.id,
           'فاتورة جديدة',
-          `وصلت إليك فاتورة رقم (${orderNumber}) من ${senderBusiness.name}`,
+          `وصلت إليك فاتورة رقم (${orderNumber}) من المورد ${senderBusiness.name}`,
           {
             type: 'NEW_ORDER',
             notificationType: 'new_order',
