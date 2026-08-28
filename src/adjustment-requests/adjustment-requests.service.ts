@@ -17,6 +17,7 @@ type TargetInfo = {
   targetId: string;
   senderId: string;
   receiverId: string;
+  connectionId?: string | null;
   currentAmount: Decimal;
   currentDueDate?: Date | null;
   currentNote?: string | null;
@@ -314,29 +315,38 @@ export class AdjustmentRequestsService {
                   const qty = Math.max(1, parseInt(item.quantity?.toString() || '1', 10));
                   const unitPrice = item.unitPrice !== undefined ? item.unitPrice.toString() : '0';
                   const itemTotal = new Decimal(qty).times(new Decimal(unitPrice)).toString();
-                  const itemName = item.itemName || 'صنف';
                   const unit = item.unit || undefined;
 
-                  const match = itemId
+                  const match = (itemId && itemId !== request.targetId)
                     ? existingItems.find((e) => e.id === itemId)
                     : (i < existingItems.length ? existingItems[i] : null);
+
+                  const isPlaceholderName = !item.itemName || 
+                    item.itemName === 'صنف' || 
+                    item.itemName === 'صنف الفاتورة' || 
+                    item.itemName === 'تفاصيل الفاتورة' ||
+                    item.itemName.startsWith('فاتورة مبيعات');
+                  
+                  const resolvedItemName = isPlaceholderName && match
+                    ? match.itemName
+                    : (item.itemName || match?.itemName || 'صنف');
 
                   if (match) {
                     await tx.orderItem.update({
                       where: { id: match.id },
                       data: {
-                        itemName,
+                        itemName: resolvedItemName,
                         quantity: qty,
                         unitPrice,
                         total: itemTotal,
-                        unit,
+                        unit: unit || match.unit,
                       },
                     });
                   } else {
                     await tx.orderItem.create({
                       data: {
                         orderId: request.targetId,
-                        itemName,
+                        itemName: resolvedItemName,
                         quantity: qty,
                         unitPrice,
                         total: itemTotal,
@@ -449,16 +459,25 @@ export class AdjustmentRequestsService {
       }
 
       // 3. Rebuild account balance from ledger ground truth
-      const connection = await tx.connection.findFirst({
-        where: {
-          OR: [
-            { requesterId: target.senderId, receiverId: target.receiverId },
-            { requesterId: target.receiverId, receiverId: target.senderId },
-          ],
-          status: { in: ['ACCEPTED', 'ACTIVE', 'accepted', 'active'] },
-        },
-        include: { account: true },
-      });
+      let connection = target.connectionId
+        ? await tx.connection.findUnique({
+            where: { id: target.connectionId },
+            include: { account: true },
+          })
+        : null;
+
+      if (!connection) {
+        connection = await tx.connection.findFirst({
+          where: {
+            OR: [
+              { requesterId: target.senderId, receiverId: target.receiverId },
+              { requesterId: target.receiverId, receiverId: target.senderId },
+            ],
+            status: { in: ['ACCEPTED', 'ACTIVE', 'accepted', 'active'] },
+          },
+          include: { account: true },
+        });
+      }
 
       if (connection?.account) {
         await this.financeService.rebuildAccountBalance(
@@ -654,6 +673,7 @@ export class AdjustmentRequestsService {
         targetId,
         senderId: order.senderId,
         receiverId: order.receiverId,
+        connectionId: order.connectionId,
         currentAmount: new Decimal(order.total as any),
         currentDueDate: order.dueDate,
         currentNote: order.notes,
@@ -679,6 +699,7 @@ export class AdjustmentRequestsService {
       targetId,
       senderId: transaction.senderId,
       receiverId: transaction.receiverId,
+      connectionId: transaction.connectionId,
       currentAmount: new Decimal(transaction.amount as any),
       currentDueDate: transaction.dueDate,
       currentNote: transaction.note,

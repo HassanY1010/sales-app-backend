@@ -465,20 +465,23 @@ export class FinanceService {
     });
 
     if (!account) throw new NotFoundException('Account not found');
-    if (!account.connection.receiverId) return;
-    const receiverId = account.connection.receiverId;
+    const receiverId = account.connection?.receiverId;
 
     const transactions = await client.transaction.findMany({
       where: {
         OR: [
           { connectionId: account.connectionId },
-          {
-            connectionId: null,
-            OR: [
-              { senderId: account.connection.requesterId, receiverId },
-              { senderId: receiverId, receiverId: account.connection.requesterId },
-            ],
-          },
+          ...(receiverId
+            ? [
+                {
+                  connectionId: null,
+                  OR: [
+                    { senderId: account.connection.requesterId, receiverId },
+                    { senderId: receiverId, receiverId: account.connection.requesterId },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       include: { order: true },
@@ -487,6 +490,8 @@ export class FinanceService {
 
     const isCustomer = (account.connection?.connectionType || 'CUSTOMER').toUpperCase() === 'CUSTOMER';
     let balance = new Decimal(0);
+    let hasOpeningTxn = false;
+
     for (const t of transactions) {
       let amount = new Decimal(t.amount as any);
 
@@ -510,13 +515,26 @@ export class FinanceService {
           balance = balance.minus(amount);
           break;
         case 'ADJUSTMENT':
-          if (t.note?.includes('افتتاحي')) {
+          if (t.note?.includes('افتتاحي') || (t as any).type === 'OPENING_BALANCE') {
+            hasOpeningTxn = true;
             balance = balance.plus(amount);
           } else {
             const isSenderRequester = t.senderId === account.connection.requesterId;
             balance = isSenderRequester ? balance.plus(amount) : balance.minus(amount);
           }
           break;
+      }
+    }
+
+    // If there was no opening balance transaction in the ledger, add the canonical account.openingBalance
+    if (!hasOpeningTxn) {
+      const opBal = new Decimal(
+        (account.openingBalance as any) ||
+        (account.connection as any)?.pendingOpenBalance ||
+        0
+      );
+      if (!opBal.isZero()) {
+        balance = balance.plus(opBal);
       }
     }
 
