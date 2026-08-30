@@ -114,7 +114,11 @@ export class TransactionsService {
         include: {
           sender: true,
           receiver: true,
-          order: true,
+          order: {
+            include: {
+              items: true,
+            },
+          },
         },
         orderBy: {
           createdAt: 'desc',
@@ -153,7 +157,11 @@ export class TransactionsService {
       include: {
         sender: true,
         receiver: true,
-        order: true,
+        order: {
+          include: {
+            items: true,
+          },
+        },
       },
     });
     if (!transaction) throw new NotFoundException('Transaction not found');

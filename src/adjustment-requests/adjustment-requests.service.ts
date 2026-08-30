@@ -149,13 +149,50 @@ export class AdjustmentRequestsService {
     const requesterBusiness = await this.prisma.business.findUnique({
       where: { id: businessId },
     });
-    const requesterName = requesterBusiness?.name || 'العميل';
+    const requesterName = requesterBusiness?.name || 'الطرف الآخر';
     const typeLabel = dto.targetType === 'ORDER' ? 'فاتورة' : 'سند';
+
+    // Determine the relationship/role of the requester from the perspective of the receiver
+    // If receiver is the seller (e.g. order.receiverId === receiverBusinessId), then the requester is their CUSTOMER (العميل).
+    // If receiver is the buyer (e.g. order.senderId === receiverBusinessId), then the requester is their SUPPLIER (المورد).
+    let requesterRoleFromReceiverPerspective = 'العميل';
+    if (dto.targetType === 'ORDER') {
+      const order = await this.prisma.order.findUnique({
+        where: { id: dto.targetId },
+      });
+      if (order) {
+        if (order.senderId === receiverBusinessId) {
+          // Receiver is the buyer/order sender -> Requester is the supplier
+          requesterRoleFromReceiverPerspective = 'المورد';
+        } else {
+          // Receiver is the seller/order receiver -> Requester is the customer
+          requesterRoleFromReceiverPerspective = 'العميل';
+        }
+      }
+    } else if (dto.targetType === 'TRANSACTION') {
+      const txn = await this.prisma.transaction.findUnique({
+        where: { id: dto.targetId },
+        include: { connection: true },
+      });
+      if (txn) {
+        if (txn.connection) {
+          const reqRole = (txn.connection.connectionType || 'CUSTOMER').toUpperCase();
+          const receiverConnRole = txn.connection.requesterId === receiverBusinessId
+            ? reqRole
+            : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+          requesterRoleFromReceiverPerspective = receiverConnRole === 'SUPPLIER' ? 'المورد' : 'العميل';
+        } else if (txn.transactionType === 'PURCHASE') {
+          requesterRoleFromReceiverPerspective = 'المورد';
+        } else {
+          requesterRoleFromReceiverPerspective = 'العميل';
+        }
+      }
+    }
 
     await this.notifyBusiness(
       receiverBusinessId,
       'طلب تعديل بانتظار المراجعة',
-      `طلب العميل (${requesterName}) تعديل ${typeLabel} #${target.label.replace('order ', '').replace('transaction ', '') || target.targetId}.`,
+      `طلب ${requesterRoleFromReceiverPerspective} (${requesterName}) تعديل ${typeLabel} #${target.label.replace('order ', '').replace('transaction ', '') || target.targetId}.`,
       {
         type: 'ADJUSTMENT_REQUEST_CREATED',
         notificationType: 'amendment_request_pending',
@@ -225,8 +262,64 @@ export class AdjustmentRequestsService {
       this.prisma.adjustmentRequest.count({ where }),
     ]);
 
+    const enrichedData = await Promise.all(
+      data.map(async (req) => {
+        let targetDetail: any = null;
+        if (req.targetType === 'ORDER') {
+          const order = await this.prisma.order.findUnique({
+            where: { id: req.targetId },
+            select: {
+              id: true,
+              orderNumber: true,
+              connectionId: true,
+              senderId: true,
+              receiverId: true,
+            },
+          });
+          if (order) {
+            targetDetail = {
+              ...order,
+              targetRole: order.receiverId === businessId ? 'CUSTOMER' : 'SUPPLIER',
+            };
+          }
+        } else if (req.targetType === 'TRANSACTION') {
+          const txn = await this.prisma.transaction.findUnique({
+            where: { id: req.targetId },
+            select: {
+              id: true,
+              voucherNumber: true,
+              transactionType: true,
+              connectionId: true,
+              senderId: true,
+              receiverId: true,
+              connection: { select: { connectionType: true, requesterId: true, receiverId: true } },
+            },
+          });
+          if (txn) {
+            let role = 'CUSTOMER';
+            if (txn.connection) {
+              const reqRole = (txn.connection.connectionType || 'CUSTOMER').toUpperCase();
+              role = txn.connection.requesterId === businessId
+                ? reqRole
+                : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+            } else if (txn.transactionType === 'PURCHASE') {
+              role = 'SUPPLIER';
+            }
+            targetDetail = {
+              ...txn,
+              targetRole: role,
+            };
+          }
+        }
+        return {
+          ...req,
+          targetDetail,
+        };
+      }),
+    );
+
     return {
-      data,
+      data: enrichedData,
       meta: {
         total,
         page,
