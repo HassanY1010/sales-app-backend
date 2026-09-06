@@ -46,9 +46,10 @@ export class FinanceService {
       accountRole?: 'CUSTOMER' | 'SUPPLIER';
       clientId?: string; // Device-generated UUID for idempotency
       initiatorBusinessId?: string; // The caller/creator business ID
+      skipNotification?: boolean;
     },
   ) {
-    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId, accountRole, initiatorBusinessId } =
+    const { senderId, receiverId, amount, type, orderId, note, userId, connectionId, accountRole, initiatorBusinessId, skipNotification } =
       params;
     const decimalAmount = new Decimal(amount.toString());
 
@@ -342,7 +343,9 @@ export class FinanceService {
     });
 
     // 7. Send Real-time Notification
-    await this.notifyFinancialMovement(params, newBalance, transaction.id);
+    if (!skipNotification) {
+      await this.notifyFinancialMovement(params, newBalance, transaction.id);
+    }
 
     return { transaction, newBalance };
   }

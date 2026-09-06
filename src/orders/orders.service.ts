@@ -27,6 +27,22 @@ export class OrdersService {
     private readonly invoiceNumberService: InvoiceNumberService,
   ) {}
 
+  async getNextInvoiceNumberPreview(businessId?: string) {
+    if (!businessId) {
+      return { nextInvoiceNumber: '1' };
+    }
+    const nextNumber = await this.invoiceNumberService.peekNextInvoiceNumber(businessId);
+    return { nextInvoiceNumber: nextNumber };
+  }
+
+  async getNextOrderNumberPreview(businessId?: string) {
+    if (!businessId) {
+      return { nextOrderNumber: '1', nextInvoiceNumber: '1' };
+    }
+    const nextNumber = await this.invoiceNumberService.peekNextOrderNumber(businessId);
+    return { nextOrderNumber: nextNumber, nextInvoiceNumber: nextNumber };
+  }
+
   async createOrder(senderId: string, dto: CreateOrderDto, userType: string) {
     if (senderId === dto.receiverId) {
       throw new BadRequestException('لا يمكنك إنشاء طلبية لنفسك');
@@ -153,8 +169,13 @@ export class OrdersService {
       : connection.account.dueDate;
 
     return this.prisma.$transaction(async (prisma) => {
-      // Generate sequential invoice number atomically inside the transaction
-      const orderNumber = await this.invoiceNumberService.getNextInvoiceNumber(prisma);
+      // Decouple Purchase Orders counter from Sales Invoices counter:
+      // When pricesVisible is false (or supplier purchase order), use independent order counter.
+      // When pricesVisible is true (sales invoice), use independent invoice counter.
+      const orderNumber = pricesVisible
+        ? await this.invoiceNumberService.getNextInvoiceNumber(senderId, prisma)
+        : await this.invoiceNumberService.getNextOrderNumber(senderId, prisma);
+
       const initialStatus = pricesVisible ? 'ISSUED' : 'PENDING';
       const order = await prisma.order.create({
         data: {

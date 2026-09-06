@@ -7,28 +7,28 @@ export class InvoiceNumberService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Generates the next sequential invoice number atomically.
-   * Uses PostgreSQL UPDATE ... RETURNING to prevent race conditions.
-   *
-   * MUST be called inside a Prisma $transaction when the caller
-   * also creates an Order/Transaction in the same atomic block.
-   *
-   * @param tx - Optional Prisma transaction client. If provided, the
-   *             counter update participates in the same transaction.
-   * @returns The next invoice number as a string (e.g. "1", "2", "3")
+   * Generates the next sequential invoice number atomically for a specific business/user.
+   * Starts at 1 for each user and increments sequentially without affecting other users.
    */
   async getNextInvoiceNumber(
+    businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<string> {
     const client = (tx ?? this.prisma) as any;
 
-    // Atomically increment the counter and return the new value.
-    // The upsert ensures the seed row (id=1, lastNum=0) exists on first use.
+    // Ensure the per-business counter table exists
+    await client.$executeRaw`
+      CREATE TABLE IF NOT EXISTS business_invoice_counter (
+        "businessId" TEXT PRIMARY KEY,
+        "lastNum" BIGINT NOT NULL DEFAULT 0
+      )
+    `;
+
     const result = await client.$queryRaw<{ lastNum: bigint }[]>`
-      INSERT INTO invoice_counter (id, "lastNum")
-      VALUES (1, 1)
-      ON CONFLICT (id)
-      DO UPDATE SET "lastNum" = invoice_counter."lastNum" + 1
+      INSERT INTO business_invoice_counter ("businessId", "lastNum")
+      VALUES (${businessId}, 1)
+      ON CONFLICT ("businessId")
+      DO UPDATE SET "lastNum" = business_invoice_counter."lastNum" + 1
       RETURNING "lastNum"
     `;
 
@@ -37,7 +37,148 @@ export class InvoiceNumberService {
       throw new Error('Failed to generate invoice number');
     }
 
-    // BigInt → string (plain number, no prefix)
     return num.toString();
   }
+
+  /**
+   * Peeks the upcoming next invoice number for a specific business without incrementing.
+   */
+  async peekNextInvoiceNumber(businessId: string): Promise<string> {
+    try {
+      await this.prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS business_invoice_counter (
+          "businessId" TEXT PRIMARY KEY,
+          "lastNum" BIGINT NOT NULL DEFAULT 0
+        )
+      `;
+
+      const rows = await this.prisma.$queryRaw<{ lastNum: bigint }[]>`
+        SELECT "lastNum" FROM business_invoice_counter WHERE "businessId" = ${businessId}
+      `;
+      const lastNum = rows[0]?.lastNum;
+      if (lastNum === undefined || lastNum === null) {
+        return '1';
+      }
+      return (BigInt(lastNum) + BigInt(1)).toString();
+    } catch {
+      return '1';
+    }
+  }
+
+  /**
+   * Generates the next sequential voucher (receipt/payment) number for a specific business.
+   * Starts at 1 for each user.
+   */
+  async getNextVoucherNumber(
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    const client = (tx ?? this.prisma) as any;
+
+    await client.$executeRaw`
+      CREATE TABLE IF NOT EXISTS business_voucher_counter (
+        "businessId" TEXT PRIMARY KEY,
+        "lastNum" BIGINT NOT NULL DEFAULT 0
+      )
+    `;
+
+    const result = await client.$queryRaw<{ lastNum: bigint }[]>`
+      INSERT INTO business_voucher_counter ("businessId", "lastNum")
+      VALUES (${businessId}, 1)
+      ON CONFLICT ("businessId")
+      DO UPDATE SET "lastNum" = business_voucher_counter."lastNum" + 1
+      RETURNING "lastNum"
+    `;
+
+    const num = result[0]?.lastNum;
+    if (num === undefined || num === null) {
+      throw new Error('Failed to generate voucher number');
+    }
+
+    return num.toString();
+  }
+
+  /**
+   * Peeks the upcoming next voucher number for a specific business without incrementing.
+   */
+  async peekNextVoucherNumber(businessId: string): Promise<string> {
+    try {
+      await this.prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS business_voucher_counter (
+          "businessId" TEXT PRIMARY KEY,
+          "lastNum" BIGINT NOT NULL DEFAULT 0
+        )
+      `;
+
+      const rows = await this.prisma.$queryRaw<{ lastNum: bigint }[]>`
+        SELECT "lastNum" FROM business_voucher_counter WHERE "businessId" = ${businessId}
+      `;
+      const lastNum = rows[0]?.lastNum;
+      if (lastNum === undefined || lastNum === null) {
+        return '1';
+      }
+      return (BigInt(lastNum) + BigInt(1)).toString();
+    } catch {
+      return '1';
+    }
+  }
+
+  /**
+   * Generates the next sequential order (purchase order) number atomically for a specific business.
+   * Starts at 1 for each user and increments sequentially without affecting invoices or vouchers.
+   */
+  async getNextOrderNumber(
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<string> {
+    const client = (tx ?? this.prisma) as any;
+
+    await client.$executeRaw`
+      CREATE TABLE IF NOT EXISTS business_order_counter (
+        "businessId" TEXT PRIMARY KEY,
+        "lastNum" BIGINT NOT NULL DEFAULT 0
+      )
+    `;
+
+    const result = await client.$queryRaw<{ lastNum: bigint }[]>`
+      INSERT INTO business_order_counter ("businessId", "lastNum")
+      VALUES (${businessId}, 1)
+      ON CONFLICT ("businessId")
+      DO UPDATE SET "lastNum" = business_order_counter."lastNum" + 1
+      RETURNING "lastNum"
+    `;
+
+    const num = result[0]?.lastNum;
+    if (num === undefined || num === null) {
+      throw new Error('Failed to generate order number');
+    }
+
+    return num.toString();
+  }
+
+  /**
+   * Peeks the upcoming next order number for a specific business without incrementing.
+   */
+  async peekNextOrderNumber(businessId: string): Promise<string> {
+    try {
+      await this.prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS business_order_counter (
+          "businessId" TEXT PRIMARY KEY,
+          "lastNum" BIGINT NOT NULL DEFAULT 0
+        )
+      `;
+
+      const rows = await this.prisma.$queryRaw<{ lastNum: bigint }[]>`
+        SELECT "lastNum" FROM business_order_counter WHERE "businessId" = ${businessId}
+      `;
+      const lastNum = rows[0]?.lastNum;
+      if (lastNum === undefined || lastNum === null) {
+        return '1';
+      }
+      return (BigInt(lastNum) + BigInt(1)).toString();
+    } catch {
+      return '1';
+    }
+  }
 }
+

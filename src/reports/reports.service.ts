@@ -52,7 +52,8 @@ export class ReportsService {
           businessName: otherBusiness.name,
           amount: balance.abs().toString(),
         };
-      });
+      })
+      .sort((a, b) => new Decimal(b.amount).comparedTo(new Decimal(a.amount)));
   }
 
   async getMyDebts(businessId: string, query: any = {}) {
@@ -101,14 +102,15 @@ export class ReportsService {
           businessName: otherBusiness.name,
           amount: balance.abs().toString(),
         };
-      });
+      })
+      .sort((a, b) => new Decimal(b.amount).comparedTo(new Decimal(a.amount)));
   }
 
   async getSummary(businessId: string, query: any = {}) {
     // Basic dashboard summary stats
     const dateRange = this.resolveDateRange(query);
 
-    const [orders, connections] = await Promise.all([
+    const [orders, connections, receiptVouchersCount] = await Promise.all([
       this.prisma.order.findMany({
         where: {
           OR: [{ senderId: businessId }, { receiverId: businessId }],
@@ -122,6 +124,14 @@ export class ReportsService {
         },
         include: { account: true },
       }),
+      this.prisma.transaction.count({
+        where: {
+          transactionType: 'PAYMENT',
+          receiverId: businessId, // Received payments (receipt vouchers) for this business
+          orderId: null, // Standalone real receipt vouchers
+          ...(dateRange && { createdAt: dateRange }),
+        },
+      }),
     ]);
 
     let totalSales = new Decimal(0);
@@ -129,11 +139,18 @@ export class ReportsService {
     let receivable = new Decimal(0);
     let payable = new Decimal(0);
 
+    const validSalesStatuses = ['ISSUED', 'ACCEPTED', 'COMPLETED', 'ACTIVE', 'DELIVERED'];
+    const validPurchaseStatuses = ['ACCEPTED', 'COMPLETED', 'ACTIVE', 'DELIVERED'];
+
     orders.forEach((o) => {
-      if (o.status === 'COMPLETED' || o.status === 'ACCEPTED') {
-        if (o.senderId === businessId)
-          totalPurchases = totalPurchases.plus(o.total as any);
-        else totalSales = totalSales.plus(o.total as any);
+      const statusUpper = (o.status || '').toUpperCase();
+      const isSalesInvoice = o.receiverId === businessId || (o.senderId === businessId && o.pricesVisible);
+      const isPurchaseOrder = o.senderId === businessId && !o.pricesVisible;
+
+      if (isSalesInvoice && validSalesStatuses.includes(statusUpper)) {
+        totalSales = totalSales.plus(o.total as any);
+      } else if (isPurchaseOrder && validPurchaseStatuses.includes(statusUpper)) {
+        totalPurchases = totalPurchases.plus(o.total as any);
       }
     });
 
@@ -170,15 +187,20 @@ export class ReportsService {
       }
     });
 
+    const pendingOrdersCount = orders.filter(
+      (o) => o.senderId === businessId && !o.pricesVisible && (o.status || '').toUpperCase() === 'PENDING',
+    ).length;
+
     return {
       totalSales: totalSales.toString(),
       totalPurchases: totalPurchases.toString(),
       receivable: receivable.toString(),
       payable: payable.toString(),
       ordersCount: orders.length,
-      pendingOrdersCount: orders.filter((o) => o.status === 'PENDING').length,
+      pendingOrdersCount,
       customersCount,
       suppliersCount,
+      receiptVouchersCount,
       period: this.describePeriod(query, dateRange),
     };
   }
@@ -186,30 +208,36 @@ export class ReportsService {
   async getOrdersReport(businessId: string, query: any = {}) {
     const { page = 1, limit = 20 } = this.resolvePagination(query);
     const dateRange = this.resolveDateRange(query);
+    
+    // Purchase orders sent to suppliers only (pricesVisible is false on initial order submission)
     const where: any = {
-      OR: [{ senderId: businessId }, { receiverId: businessId }],
+      senderId: businessId,
+      pricesVisible: false,
       ...(dateRange && { createdAt: dateRange }),
     };
 
     if (query.status) where.status = query.status;
     if (query.partyId) {
-      where.AND = [
-        {
-          OR: [{ senderId: query.partyId }, { receiverId: query.partyId }],
-        },
-      ];
+      where.receiverId = query.partyId;
     }
 
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
         include: { sender: true, receiver: true, items: true },
-        orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
       this.prisma.order.count({ where }),
     ]);
+
+    // Sort ascending by orderNumber numerically
+    orders.sort((a, b) => {
+      const numA = Number(a.orderNumber) || 0;
+      const numB = Number(b.orderNumber) || 0;
+      if (numA !== numB) return numA - numB;
+      return a.orderNumber.localeCompare(b.orderNumber);
+    });
 
     const totalAmount = orders.reduce(
       (sum, order) => sum.plus(order.total as any),
@@ -458,8 +486,11 @@ export class ReportsService {
 
     const orders = await this.prisma.order.findMany({
       where: {
-        receiverId: businessId, // Sales from this business's perspective (received orders)
-        status: { in: ['COMPLETED', 'ACCEPTED'] },
+        OR: [
+          { receiverId: businessId },
+          { senderId: businessId, pricesVisible: true },
+        ],
+        status: { in: ['COMPLETED', 'ACCEPTED', 'ISSUED', 'ACTIVE', 'DELIVERED', 'completed', 'accepted', 'issued', 'active', 'delivered'] },
         createdAt: dateRange ?? { gte: startDate },
       },
       select: {

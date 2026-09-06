@@ -422,6 +422,7 @@ export class ConnectionsService {
           type: 'ADJUSTMENT',
           note: `رصيد افتتاحي: ${openingBalance}`,
           connectionId: connection.id,
+          skipNotification: true,
         });
 
         // Log the opening balance in audit
@@ -457,19 +458,47 @@ export class ConnectionsService {
         },
       });
 
+      // Determine the role of the accepting party from the requester's perspective
+      const isRequesterCustomer = (updated.connectionType || '').toUpperCase() === 'CUSTOMER';
+      const accepterRoleForRequester = isRequesterCustomer ? 'المورد' : 'العميل';
+      const accepterName = updated.receiver.name;
+
+      let notificationTitle = 'تم قبول طلب الارتباط';
+      let notificationBody = `لقد قبل ${accepterRoleForRequester} ${accepterName} طلب الارتباط الخاص بك.`;
+
+      const openingBalNum = Number(openingBalance || 0);
+      const creditLimNum = Number(creditLimit || 0);
+
+      if (openingBalNum !== 0 || creditLimNum > 0) {
+        notificationTitle = 'تفعيل الرصيد وسقف المديونية';
+        const parts: string[] = [];
+        if (openingBalNum !== 0) {
+          parts.push(`الرصيد الافتتاحي بقيمة ${openingBalNum.toLocaleString('en-US')}`);
+        }
+        if (creditLimNum > 0) {
+          parts.push(`سقف المديونية بقيمة ${creditLimNum.toLocaleString('en-US')}`);
+        }
+        notificationBody = `قام ${accepterRoleForRequester} ${accepterName} بتفعيل ${parts.join(' و ')}.`;
+      }
+
       // Notify the requester
       await this.notificationsService.sendPushNotification(
         updated.requester.user.id,
-        'تم قبول طلب الارتباط',
-        `لقد قبل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
+        notificationTitle,
+        notificationBody,
         {
-          type: 'connection_approved',
-          notificationType: 'connection_approved',
-          entityType: 'connection_request',
+          type: 'OPENING_BALANCE',
+          notificationType: 'OPENING_BALANCE',
+          entityType: isRequesterCustomer ? 'supplier' : 'customer',
           entityId: updated.id,
+          connectionId: updated.id,
           route: `app://connection-request/${updated.id}`,
           requestId: updated.id,
           supplierId: businessId,
+          senderName: accepterName,
+          senderRole: accepterRoleForRequester,
+          openingBalance: openingBalNum.toString(),
+          creditLimit: creditLimNum.toString(),
         },
       );
 

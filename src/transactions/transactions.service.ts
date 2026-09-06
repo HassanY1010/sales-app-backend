@@ -10,6 +10,7 @@ import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { GetTransactionsDto } from './dto/get-transactions.dto';
 import { FinanceService } from '../finance/finance.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
+import { InvoiceNumberService } from '../common/invoice-number.service';
 import Decimal from 'decimal.js';
 
 @Injectable()
@@ -17,7 +18,16 @@ export class TransactionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly financeService: FinanceService,
+    private readonly invoiceNumberService: InvoiceNumberService,
   ) {}
+
+  async getNextVoucherNumberPreview(businessId?: string) {
+    if (!businessId) {
+      return { nextVoucherNumber: '1' };
+    }
+    const nextNumber = await this.invoiceNumberService.peekNextVoucherNumber(businessId);
+    return { nextVoucherNumber: nextNumber };
+  }
 
   async createTransaction(senderId: string, dto: CreateTransactionDto) {
     const recordsReceivedPayment =
@@ -39,6 +49,11 @@ export class TransactionsService {
     // Perform atomic transaction wrapping the movement
     try {
       return await this.prisma.$transaction(async (tx) => {
+        let finalVoucherNumber = dto.voucherNumber?.trim();
+        if (!finalVoucherNumber) {
+          finalVoucherNumber = await this.invoiceNumberService.getNextVoucherNumber(senderId, tx);
+        }
+
         const { transaction } = await this.financeService.recordFinancialMovement(
           tx,
           {
@@ -48,7 +63,7 @@ export class TransactionsService {
             type: dto.transactionType as any,
             orderId: dto.orderId,
             note: dto.note,
-            voucherNumber: dto.voucherNumber,
+            voucherNumber: finalVoucherNumber,
             currency: dto.currency,
             dueDate: dto.dueDate,
             attachmentUrl: dto.attachmentUrl,

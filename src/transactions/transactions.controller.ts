@@ -57,6 +57,14 @@ export class TransactionsController {
     return transaction;
   }
 
+  @Get('next-number')
+  async getNextVoucherNumber(@CurrentUser() user: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.transactionsService.getNextVoucherNumberPreview(user.businessId);
+  }
+
   @Get()
   async getTransactions(
     @CurrentUser() user: any,

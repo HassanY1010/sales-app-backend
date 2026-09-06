@@ -103,7 +103,7 @@ export class NotificationsController {
               { id: body.targetBusinessId, OR: [{ requesterId: user.businessId }, { receiverId: user.businessId }] },
             ],
           },
-          select: { id: true },
+          select: { id: true, connectionType: true, requesterId: true, receiverId: true },
         });
 
         if (!connection) {
@@ -134,18 +134,71 @@ export class NotificationsController {
     // Verify target user exists to avoid DB constraint errors
     const targetUser = await this.prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true },
+      select: { id: true, business: { select: { id: true, name: true } } },
     });
 
     if (!targetUser) {
       throw new NotFoundException('المستلم غير موجود في النظام');
     }
 
+    // Determine sender name and role from the receiver's perspective
+    const senderBusiness = user.businessId
+      ? await this.prisma.business.findUnique({
+          where: { id: user.businessId },
+          select: { id: true, name: true },
+        })
+      : null;
+
+    const senderDisplayName =
+      senderBusiness?.name || user.fullName || 'الطرف الآخر';
+
+    let senderRoleFromReceiverPerspective = 'الطرف الآخر';
+    const targetBizId = targetUser.business?.id || body.targetBusinessId;
+
+    if (user.businessId && targetBizId) {
+      const activeConnection = await this.prisma.connection.findFirst({
+        where: {
+          status: 'ACCEPTED',
+          OR: [
+            { requesterId: user.businessId, receiverId: targetBizId },
+            { requesterId: targetBizId, receiverId: user.businessId },
+          ],
+        },
+      });
+
+      if (activeConnection) {
+        const reqRole = (activeConnection.connectionType || 'CUSTOMER').toUpperCase();
+        // If receiver is the requester of connection:
+        const receiverConnRole = activeConnection.requesterId === targetBizId
+          ? reqRole
+          : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+
+        // If in receiver's system the other party is a SUPPLIER, sender is 'المورد'
+        // If in receiver's system the other party is a CUSTOMER, sender is 'العميل'
+        senderRoleFromReceiverPerspective =
+          receiverConnRole === 'SUPPLIER' ? 'المورد' : 'العميل';
+      }
+    }
+
+    const notificationTitle =
+      body.title ||
+      (senderRoleFromReceiverPerspective !== 'الطرف الآخر'
+        ? `رسالة من ${senderRoleFromReceiverPerspective} ${senderDisplayName}`
+        : `رسالة من ${senderDisplayName}`);
+
     return this.notificationsService.notifyUser(
       targetUserId,
-      body.title || `رسالة من ${user.fullName}`,
+      notificationTitle,
       body.body,
-      { type: 'DIRECT_MESSAGE', senderId: user.userId },
+      {
+        type: 'DIRECT_MESSAGE',
+        notificationType: 'DIRECT_MESSAGE',
+        entityType: 'DIRECT_MESSAGE',
+        senderId: user.userId,
+        senderBusinessId: user.businessId,
+        senderName: senderDisplayName,
+        senderRole: senderRoleFromReceiverPerspective,
+      },
     );
   }
 

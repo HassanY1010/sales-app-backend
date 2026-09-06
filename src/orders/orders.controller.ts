@@ -39,6 +39,28 @@ export class OrdersController {
     return this.ordersService.createOrder(user.businessId, dto, user.userType);
   }
 
+  @Get('next-number')
+  async getNextInvoiceNumber(
+    @CurrentUser() user: any,
+    @Query('type') type?: string,
+  ) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    if (type === 'order' || type === 'purchase_order') {
+      return this.ordersService.getNextOrderNumberPreview(user.businessId);
+    }
+    return this.ordersService.getNextInvoiceNumberPreview(user.businessId);
+  }
+
+  @Get('next-order-number')
+  async getNextOrderNumber(@CurrentUser() user: any) {
+    if (!user.businessId) {
+      throw new ForbiddenException('User does not have an associated business');
+    }
+    return this.ordersService.getNextOrderNumberPreview(user.businessId);
+  }
+
   @Get()
   async getOrders(
     @CurrentUser() user: any,

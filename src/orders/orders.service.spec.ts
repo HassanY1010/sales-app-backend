@@ -38,6 +38,7 @@ const mockNotificationsService = { sendPushNotification: jest.fn() };
 const mockEventsGateway = { emitToBusiness: jest.fn() };
 const mockInvoiceNumberService = {
   getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
+  getNextOrderNumber: jest.fn().mockResolvedValue('ORD-1001'),
   generateInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
 };
 
