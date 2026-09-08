@@ -148,6 +148,8 @@ describe('Strict Pricing Audit & E2E Evidence Verification', () => {
   const mockNotificationsService: any = { sendPushNotification: jest.fn() };
   const mockInvoiceNumberService: any = {
     getNextInvoiceNumber: jest.fn().mockImplementation(async () => `INV-20260815-${++store.invoiceSeq}`),
+    getNextOrderNumber: jest.fn().mockImplementation(async () => `ORD-20260815-${++store.invoiceSeq}`),
+    getNextVoucherNumber: jest.fn().mockImplementation(async () => `VOUCH-20260815-${++store.invoiceSeq}`),
     generateInvoiceNumber: jest.fn().mockImplementation(async () => `INV-20260815-${++store.invoiceSeq}`),
   };
 

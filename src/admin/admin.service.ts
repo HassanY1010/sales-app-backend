@@ -1286,12 +1286,23 @@ export class AdminService {
   }
 
   // ==================== Suggestions ====================
-  async getSuggestions(query: PaginationDto & { status?: string }) {
-    const { page = 1, limit = 10, status } = query;
+  async getSuggestions(query: PaginationDto & { status?: string; search?: string }) {
+    const { page = 1, limit = 10, status, search } = query;
     const skip = (page - 1) * limit;
 
     const where: any = {};
     if (status) where.status = status;
+    if (search && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { content: { contains: q, mode: 'insensitive' } },
+        { whatsapp: { contains: q, mode: 'insensitive' } },
+        { user: { fullName: { contains: q, mode: 'insensitive' } } },
+        { user: { phoneNumber: { contains: q, mode: 'insensitive' } } },
+        { user: { email: { contains: q, mode: 'insensitive' } } },
+        { user: { business: { name: { contains: q, mode: 'insensitive' } } } },
+      ];
+    }
 
     const [suggestions, total] = await Promise.all([
       this.prisma.suggestion.findMany({

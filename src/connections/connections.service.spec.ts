@@ -236,9 +236,12 @@ describe('ConnectionsService - Relationship Requests & Edge Cases', () => {
       );
       expect(notificationsService.sendPushNotification).toHaveBeenCalledWith(
         'user-supplier',
-        'تم قبول طلب الارتباط',
+        'تفعيل الرصيد وسقف المديونية',
         expect.stringContaining('متجر التجزئة'),
-        expect.any(Object),
+        expect.objectContaining({
+          senderRole: 'المورد',
+          entityType: 'supplier',
+        }),
       );
     });
   });

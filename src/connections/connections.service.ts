@@ -458,19 +458,28 @@ export class ConnectionsService {
         },
       });
 
-      // Determine the role of the accepting party from the requester's perspective
-      const isRequesterCustomer = (updated.connectionType || '').toUpperCase() === 'CUSTOMER';
-      const accepterRoleForRequester = isRequesterCustomer ? 'المورد' : 'العميل';
+      // Determine the role of the accepting party from the requester's perspective:
+      // If requester sent request from SUPPLIERS window (requestSource === 'SUPPLIERS' or connectionType === 'SUPPLIER'),
+      // the counterpart (receiver/accepter) is a SUPPLIER (المورد) to the requester.
+      // If requester sent request from CUSTOMERS window (requestSource === 'CUSTOMERS' or connectionType === 'CUSTOMER'),
+      // the counterpart (receiver/accepter) is a CUSTOMER (العميل) to the requester.
+      const rawReqSource = (updated.requestSource || '').toUpperCase();
+      const rawConnType = (updated.connectionType || '').toUpperCase();
+      const isTargetSupplier = rawReqSource === 'SUPPLIERS' || (rawReqSource === '' && rawConnType === 'SUPPLIER');
+      const accepterRoleForRequester = isTargetSupplier ? 'المورد' : 'العميل';
       const accepterName = updated.receiver.name;
 
-      let notificationTitle = 'تم قبول طلب الارتباط';
-      let notificationBody = `لقد قبل ${accepterRoleForRequester} ${accepterName} طلب الارتباط الخاص بك.`;
-
+      const hasExplicitTerms = options?.openingBalance !== undefined || options?.creditLimit !== undefined;
       const openingBalNum = Number(openingBalance || 0);
       const creditLimNum = Number(creditLimit || 0);
 
-      if (openingBalNum !== 0 || creditLimNum > 0) {
+      let notificationTitle = 'تم قبول طلب الارتباط';
+      let notificationBody = `لقد قبل ${accepterRoleForRequester} ${accepterName} طلب الارتباط الخاص بك.`;
+      let notifType = 'connection_approved';
+
+      if (hasExplicitTerms || openingBalNum !== 0 || (creditLimNum > 0 && options?.creditLimit !== undefined)) {
         notificationTitle = 'تفعيل الرصيد وسقف المديونية';
+        notifType = 'OPENING_BALANCE';
         const parts: string[] = [];
         if (openingBalNum !== 0) {
           parts.push(`الرصيد الافتتاحي بقيمة ${openingBalNum.toLocaleString('en-US')}`);
@@ -487,9 +496,9 @@ export class ConnectionsService {
         notificationTitle,
         notificationBody,
         {
-          type: 'OPENING_BALANCE',
-          notificationType: 'OPENING_BALANCE',
-          entityType: isRequesterCustomer ? 'supplier' : 'customer',
+          type: notifType,
+          notificationType: notifType,
+          entityType: isTargetSupplier ? 'supplier' : 'customer',
           entityId: updated.id,
           connectionId: updated.id,
           route: `app://connection-request/${updated.id}`,

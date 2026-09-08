@@ -288,7 +288,7 @@ export class AdminController {
   // ==================== Suggestions ====================
   @Get('suggestions')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getSuggestions(@Query() query: PaginationDto & { status?: string }) {
+  getSuggestions(@Query() query: PaginationDto & { status?: string; search?: string }) {
     return this.adminService.getSuggestions(query);
   }
 

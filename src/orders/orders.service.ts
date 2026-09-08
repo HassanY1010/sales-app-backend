@@ -220,21 +220,6 @@ export class OrdersService {
           connectionId: connection.id,
           accountRole: 'CUSTOMER',
         });
-
-        // Send push notification for issued sales invoice
-        await this.notificationsService.sendPushNotification(
-          receiverBusiness.user.id,
-          'فاتورة جديدة',
-          `وصلت إليك فاتورة رقم (${orderNumber}) من المورد ${senderBusiness.name}`,
-          {
-            type: 'NEW_ORDER',
-            notificationType: 'new_order',
-            entityType: 'order',
-            entityId: order.id,
-            orderId: order.id,
-            route: `/receive-orders/incoming?orderId=${order.id}`,
-          },
-        );
       }
 
       this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {

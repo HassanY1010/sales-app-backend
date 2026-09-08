@@ -29,6 +29,8 @@ describe('FINAL HARD OPENING BALANCE VERIFICATION & AUDIT', () => {
   const mockInvoiceNumberService = {
     generateInvoiceNumber: jest.fn().mockImplementation(async () => `INV-2026-${++seq}`),
     getNextInvoiceNumber: jest.fn().mockImplementation(async () => `INV-2026-${++seq}`),
+    getNextOrderNumber: jest.fn().mockImplementation(async () => `ORD-2026-${++seq}`),
+    getNextVoucherNumber: jest.fn().mockImplementation(async () => `VOUCH-2026-${++seq}`),
   };
 
   const mockPrisma: any = {

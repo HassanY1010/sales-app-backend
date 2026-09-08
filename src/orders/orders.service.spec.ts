@@ -731,12 +731,15 @@ describe('OrdersService', () => {
         'business',
       );
 
-      // Verify push notification sent to customer contains "المورد بقالة صنعاء"
-      expect(mockNotificationsService.sendPushNotification).toHaveBeenCalledWith(
-        'user-cust',
-        'فاتورة جديدة',
-        expect.stringContaining('من المورد بقالة صنعاء'),
-        expect.objectContaining({ type: 'NEW_ORDER' }),
+      // Verify financial movement recorded for the sale (which handles the single notification)
+      expect(mockFinanceService.recordFinancialMovement).toHaveBeenCalledWith(
+        mockPrisma,
+        expect.objectContaining({
+          senderId: 'supp-sanaa',
+          receiverId: 'cust-barakah',
+          type: 'SALE',
+          amount: '1500',
+        }),
       );
     });
   });

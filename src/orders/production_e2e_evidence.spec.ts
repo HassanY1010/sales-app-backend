@@ -225,6 +225,8 @@ describe('Production E2E Evidence Verification', () => {
   const mockEvents: any = { emitToBusiness: jest.fn() };
   const mockInvoiceNumber: any = {
     getNextInvoiceNumber: jest.fn(async () => `INV-20260812-${++store.invoiceSeq}`),
+    getNextOrderNumber: jest.fn(async () => `ORD-20260812-${++store.invoiceSeq}`),
+    getNextVoucherNumber: jest.fn(async () => `VOUCH-20260812-${++store.invoiceSeq}`),
   };
 
   beforeEach(() => {

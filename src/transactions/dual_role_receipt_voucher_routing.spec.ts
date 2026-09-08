@@ -4,6 +4,7 @@ import { FinanceService } from '../finance/finance.service';
 import { PrismaService } from '../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
+import { InvoiceNumberService } from '../common/invoice-number.service';
 import { Decimal } from 'decimal.js';
 
 describe('Dual-Role Receipt Voucher Routing & Connection Integrity Tests', () => {
@@ -46,6 +47,10 @@ describe('Dual-Role Receipt Voucher Routing & Connection Integrity Tests', () =>
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    const mockInvoiceNumberService = {
+      getNextVoucherNumber: jest.fn().mockResolvedValue('PAY-1001'),
+      getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -54,6 +59,7 @@ describe('Dual-Role Receipt Voucher Routing & Connection Integrity Tests', () =>
         { provide: PrismaService, useValue: mockPrisma },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: EventsGateway, useValue: mockEventsGateway },
+        { provide: InvoiceNumberService, useValue: mockInvoiceNumberService },
       ],
     }).compile();
 

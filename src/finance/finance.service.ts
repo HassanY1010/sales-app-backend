@@ -384,10 +384,14 @@ export class FinanceService {
           `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
           {
             type: 'PAYMENT_RECEIVED',
-            amount: amountStr,
-            transactionType: type,
+            notificationType: 'payment_received',
+            entityType: 'payment',
+            entityId: transactionId,
             recordId: transactionId,
             transactionId: transactionId,
+            amount: amountStr,
+            transactionType: type,
+            route: `/receipt-vouchers/${transactionId}`,
           },
         );
 

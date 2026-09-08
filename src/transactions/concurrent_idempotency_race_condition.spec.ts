@@ -4,6 +4,7 @@ import { FinanceService } from '../finance/finance.service';
 import { PrismaService } from '../database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventsGateway } from '../events/events.gateway';
+import { InvoiceNumberService } from '../common/invoice-number.service';
 import { Test, TestingModule } from '@nestjs/testing';
 
 describe('Same clientId Concurrent Race-Condition & Idempotency Audit', () => {
@@ -155,6 +156,11 @@ describe('Same clientId Concurrent Race-Condition & Idempotency Audit', () => {
       emitToUserBusiness: jest.fn(),
     };
 
+    const mockInvoiceNumberService = {
+      getNextVoucherNumber: jest.fn().mockResolvedValue('PAY-1001'),
+      getNextInvoiceNumber: jest.fn().mockResolvedValue('INV-1001'),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TransactionsService,
@@ -162,6 +168,7 @@ describe('Same clientId Concurrent Race-Condition & Idempotency Audit', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: NotificationsService, useValue: mockNotificationsService },
         { provide: EventsGateway, useValue: mockEventsGateway },
+        { provide: InvoiceNumberService, useValue: mockInvoiceNumberService },
       ],
     }).compile();
 

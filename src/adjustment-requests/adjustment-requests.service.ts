@@ -153,21 +153,32 @@ export class AdjustmentRequestsService {
     const typeLabel = dto.targetType === 'ORDER' ? 'فاتورة' : 'سند';
 
     // Determine the relationship/role of the requester from the perspective of the receiver
-    // If receiver is the seller (e.g. order.receiverId === receiverBusinessId), then the requester is their CUSTOMER (العميل).
-    // If receiver is the buyer (e.g. order.senderId === receiverBusinessId), then the requester is their SUPPLIER (المورد).
+    // Rule:
+    // When modification is done from Suppliers window -> Receiver must see requester as 'CUSTOMER' (العميل) and targetRole = 'CUSTOMER'.
+    // When modification is done from Customers window -> Receiver must see requester as 'SUPPLIER' (المورد) and targetRole = 'SUPPLIER'.
     let requesterRoleFromReceiverPerspective = 'العميل';
+    let targetRoleForReceiver: 'CUSTOMER' | 'SUPPLIER' = 'CUSTOMER';
+
     if (dto.targetType === 'ORDER') {
       const order = await this.prisma.order.findUnique({
         where: { id: dto.targetId },
+        include: { connection: true },
       });
       if (order) {
-        if (order.senderId === receiverBusinessId) {
-          // Receiver is the buyer/order sender -> Requester is the supplier
-          requesterRoleFromReceiverPerspective = 'المورد';
+        if (order.connection) {
+          const reqRole = (order.connection.connectionType || 'CUSTOMER').toUpperCase();
+          const receiverConnRole = order.connection.requesterId === receiverBusinessId
+            ? reqRole
+            : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+          targetRoleForReceiver = receiverConnRole === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER';
+        } else if (order.senderId === receiverBusinessId) {
+          // Receiver created the order -> receiver was buying (or selling depending on role)
+          // Default: if receiver is sender of order, counterpart is supplier from receiver perspective
+          targetRoleForReceiver = 'SUPPLIER';
         } else {
-          // Receiver is the seller/order receiver -> Requester is the customer
-          requesterRoleFromReceiverPerspective = 'العميل';
+          targetRoleForReceiver = 'CUSTOMER';
         }
+        requesterRoleFromReceiverPerspective = targetRoleForReceiver === 'SUPPLIER' ? 'المورد' : 'العميل';
       }
     } else if (dto.targetType === 'TRANSACTION') {
       const txn = await this.prisma.transaction.findUnique({
@@ -180,12 +191,13 @@ export class AdjustmentRequestsService {
           const receiverConnRole = txn.connection.requesterId === receiverBusinessId
             ? reqRole
             : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
-          requesterRoleFromReceiverPerspective = receiverConnRole === 'SUPPLIER' ? 'المورد' : 'العميل';
+          targetRoleForReceiver = receiverConnRole === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER';
         } else if (txn.transactionType === 'PURCHASE') {
-          requesterRoleFromReceiverPerspective = 'المورد';
+          targetRoleForReceiver = 'SUPPLIER';
         } else {
-          requesterRoleFromReceiverPerspective = 'العميل';
+          targetRoleForReceiver = 'CUSTOMER';
         }
+        requesterRoleFromReceiverPerspective = targetRoleForReceiver === 'SUPPLIER' ? 'المورد' : 'العميل';
       }
     }
 
@@ -196,7 +208,11 @@ export class AdjustmentRequestsService {
       {
         type: 'ADJUSTMENT_REQUEST_CREATED',
         notificationType: 'amendment_request_pending',
-        entityType: 'invoice',
+        entityType: targetRoleForReceiver === 'SUPPLIER' ? 'supplier' : 'customer',
+        targetRole: targetRoleForReceiver,
+        senderRole: requesterRoleFromReceiverPerspective,
+        senderName: requesterName,
+        targetType: dto.targetType,
         entityId: target.targetId,
         route: `app://invoice/${target.targetId}/amendment-request/${request.id}`,
         adjustmentRequestId: request.id,
@@ -274,12 +290,22 @@ export class AdjustmentRequestsService {
               connectionId: true,
               senderId: true,
               receiverId: true,
+              connection: { select: { id: true, connectionType: true, requesterId: true, receiverId: true } },
             },
           });
           if (order) {
+            let role = 'CUSTOMER';
+            if (order.connection) {
+              const reqRole = (order.connection.connectionType || 'CUSTOMER').toUpperCase();
+              role = order.connection.requesterId === businessId
+                ? reqRole
+                : (reqRole === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
+            } else {
+              role = order.senderId === businessId ? 'SUPPLIER' : 'CUSTOMER';
+            }
             targetDetail = {
               ...order,
-              targetRole: order.receiverId === businessId ? 'CUSTOMER' : 'SUPPLIER',
+              targetRole: role,
             };
           }
         } else if (req.targetType === 'TRANSACTION') {
@@ -292,7 +318,7 @@ export class AdjustmentRequestsService {
               connectionId: true,
               senderId: true,
               receiverId: true,
-              connection: { select: { connectionType: true, requesterId: true, receiverId: true } },
+              connection: { select: { id: true, connectionType: true, requesterId: true, receiverId: true } },
             },
           });
           if (txn) {
