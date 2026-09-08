@@ -22,7 +22,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "check:prod-env": "node scripts/validate-production-env.js",
-    "render:start": "npx prisma db push --skip-generate && npm run start:prod"
+    "render:start": "npx prisma db push --accept-data-loss --skip-generate && npm run start:prod"
   },
   "dependencies": {
     "@nestjs/config": "^4.0.4",
