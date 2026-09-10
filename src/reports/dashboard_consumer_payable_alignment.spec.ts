@@ -40,6 +40,10 @@ describe('Dashboard "عليك" (Payable) & Supplier Reports Exact Accounting Ali
         return Array.from(store.orders.values());
       }),
     },
+    transaction: {
+      count: jest.fn(async () => 0),
+      findMany: jest.fn(async () => []),
+    },
   };
 
   beforeAll(() => {

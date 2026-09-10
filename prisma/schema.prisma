@@ -154,7 +154,7 @@ model Account {
 model Order {
   id              String        @id @default(uuid())
   clientId        String?       @unique   // UUID generated on device — prevents duplicate creation on retry
-  orderNumber     String        @unique
+  orderNumber     String
   senderId        String
   receiverId      String
   connectionId    String?
@@ -181,6 +181,7 @@ model Order {
   connection      Connection?   @relation(fields: [connectionId], references: [id])
   transactions    Transaction[]
 
+  @@unique([senderId, orderNumber])
   @@index([status])
   @@index([connectionId])
   @@index([createdAt], map: "orders_created_at_idx")
