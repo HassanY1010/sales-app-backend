@@ -119,8 +119,10 @@ export class OrdersService {
       );
     }
 
-    const pricesVisible =
-      dto.pricesVisible ?? (connection.showPrices || userType === 'business');
+    // If it is a purchase order to a supplier (or explicitly pricesVisible is false), prices are NOT visible until supplier accepts
+    const pricesVisible = dto.pricesVisible !== undefined
+      ? dto.pricesVisible
+      : (isPurchase ? false : (connection.showPrices || userType === 'business'));
     let subtotal = new Decimal(0);
     const itemsData = dto.items.map((item) => {
       const unitPrice = pricesVisible
@@ -201,8 +203,10 @@ export class OrdersService {
         include: { items: true, sender: true, receiver: true },
       });
 
-      // ── Immediate Financial Movement for ALL Invoices (Cash & Deferred) ──
-      if (pricesVisible) {
+      // ── Immediate Financial Movement for Invoices (Cash & Deferred) ──
+      // Note: Only sales invoices with visible prices record immediate movements.
+      // Purchase orders to suppliers start as PENDING with no immediate financial movement until accepted.
+      if (pricesVisible && !isPurchase) {
         // 1. Record the SALE movement (Debits receiver's account / increases debt for customer by net remaining amount)
         await this.financeService.recordFinancialMovement(prisma, {
           senderId,

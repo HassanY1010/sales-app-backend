@@ -50,8 +50,12 @@ export class TransactionsService {
     try {
       return await this.prisma.$transaction(async (tx) => {
         let finalVoucherNumber = dto.voucherNumber?.trim();
-        if (!finalVoucherNumber) {
-          finalVoucherNumber = await this.invoiceNumberService.getNextVoucherNumber(senderId, tx);
+        // If no voucher number, or if it is purely numeric (auto-suggested or sequential),
+        // we atomically advance the sequence counter.
+        // We always invoke getNextVoucherNumber to advance the counter properly.
+        const nextSeq = await this.invoiceNumberService.getNextVoucherNumber(senderId, tx);
+        if (!finalVoucherNumber || !isNaN(Number(finalVoucherNumber))) {
+          finalVoucherNumber = nextSeq;
         }
 
         const { transaction } = await this.financeService.recordFinancialMovement(

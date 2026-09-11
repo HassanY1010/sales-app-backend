@@ -590,7 +590,7 @@ export class ConnectionsService {
       });
 
       return this.normalizeConnection(freshConnection, businessId);
-    });
+    }, { timeout: 30000 });
   }
 
   async rejectConnection(businessId: string, userId: string, connectionId: string) {
