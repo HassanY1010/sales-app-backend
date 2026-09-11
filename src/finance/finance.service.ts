@@ -367,7 +367,7 @@ export class FinanceService {
     tx?: Prisma.TransactionClient,
   ) {
     const { senderId, receiverId, amount, type, orderId, note } = params;
-    const client = tx || this.prisma;
+    const client = (tx && (tx as any).business) ? tx : this.prisma;
 
     // Fetch participants for notification
     const sender = await client.business.findUnique({

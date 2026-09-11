@@ -248,6 +248,9 @@ export class ConnectionsService {
           receiverId: dto.receiverId,
           connectionType,
           requestSource,
+          pendingOpenBalance: dto.openingBalance !== undefined ? dto.openingBalance : undefined,
+          pendingCreditLimit: dto.creditLimit !== undefined ? dto.creditLimit : undefined,
+          requiresReceiverInput: requestSource === 'SUPPLIERS',
           isReadReceiver: false,
           lastRequestedAt: new Date(),
         },
@@ -458,58 +461,99 @@ export class ConnectionsService {
         },
       });
 
-      // Determine the role of the accepting party from the requester's perspective:
-      // If requester sent request from SUPPLIERS window (requestSource === 'SUPPLIERS' or connectionType === 'SUPPLIER'),
-      // the counterpart (receiver/accepter) is a SUPPLIER (المورد) to the requester.
-      // If requester sent request from CUSTOMERS window (requestSource === 'CUSTOMERS' or connectionType === 'CUSTOMER'),
-      // the counterpart (receiver/accepter) is a CUSTOMER (العميل) to the requester.
       const rawReqSource = (updated.requestSource || '').toUpperCase();
       const rawConnType = (updated.connectionType || '').toUpperCase();
-      const isTargetSupplier = rawReqSource === 'SUPPLIERS' || (rawReqSource === '' && rawConnType === 'SUPPLIER');
-      const accepterRoleForRequester = isTargetSupplier ? 'المورد' : 'العميل';
-      const accepterName = updated.receiver.name;
+      const isRequesterSupplier = rawReqSource === 'CUSTOMERS' || (rawReqSource === '' && rawConnType === 'CUSTOMER');
+      const isRequesterCustomer = rawReqSource === 'SUPPLIERS' || (rawReqSource === '' && rawConnType === 'SUPPLIER');
 
-      const hasExplicitTerms = options?.openingBalance !== undefined || options?.creditLimit !== undefined;
       const openingBalNum = Number(openingBalance || 0);
       const creditLimNum = Number(creditLimit || 0);
+      const hasFinancialTerms = openingBalNum !== 0 || creditLimNum > 0;
 
-      let notificationTitle = 'تم قبول طلب الارتباط';
-      let notificationBody = `لقد قبل ${accepterRoleForRequester} ${accepterName} طلب الارتباط الخاص بك.`;
-      let notifType = 'connection_approved';
-
-      if (hasExplicitTerms || openingBalNum !== 0 || (creditLimNum > 0 && options?.creditLimit !== undefined)) {
-        notificationTitle = 'تفعيل الرصيد وسقف المديونية';
-        notifType = 'OPENING_BALANCE';
-        const parts: string[] = [];
-        if (openingBalNum !== 0) {
-          parts.push(`الرصيد الافتتاحي بقيمة ${openingBalNum.toLocaleString('en-US')}`);
-        }
-        if (creditLimNum > 0) {
-          parts.push(`سقف المديونية بقيمة ${creditLimNum.toLocaleString('en-US')}`);
-        }
-        notificationBody = `قام ${accepterRoleForRequester} ${accepterName} بتفعيل ${parts.join(' و ')}.`;
+      const termsParts: string[] = [];
+      if (openingBalNum !== 0) {
+        termsParts.push(`الرصيد الافتتاحي بقيمة ${openingBalNum.toLocaleString('en-US')}`);
       }
+      if (creditLimNum > 0) {
+        termsParts.push(`سقف المديونية بقيمة ${creditLimNum.toLocaleString('en-US')}`);
+      }
+      const termsSummary = termsParts.join(' و ');
 
-      // Notify the requester
-      await this.notificationsService.sendPushNotification(
-        updated.requester.user.id,
-        notificationTitle,
-        notificationBody,
-        {
-          type: notifType,
-          notificationType: notifType,
-          entityType: isTargetSupplier ? 'supplier' : 'customer',
-          entityId: updated.id,
-          connectionId: updated.id,
-          route: `app://connection-request/${updated.id}`,
-          requestId: updated.id,
-          supplierId: businessId,
-          senderName: accepterName,
-          senderRole: accepterRoleForRequester,
-          openingBalance: openingBalNum.toString(),
-          creditLimit: creditLimNum.toString(),
-        },
-      );
+      if (isRequesterSupplier) {
+        // ── SCENARIO A: Request originated from CUSTOMERS window ──
+        // 1. Notify the Receiver (the Customer): The Supplier set their opening balance / credit limit
+        if (hasFinancialTerms) {
+          await this.notificationsService.sendPushNotification(
+            updated.receiver.user.id,
+            'تفعيل الرصيد وسقف المديونية',
+            `قام المورد ${updated.requester.name} بتفعيل ${termsSummary}.`,
+            {
+              type: 'OPENING_BALANCE',
+              notificationType: 'OPENING_BALANCE',
+              entityType: 'supplier',
+              entityId: updated.id,
+              connectionId: updated.id,
+              route: `app://connection-request/${updated.id}`,
+              requestId: updated.id,
+              supplierId: updated.requesterId,
+              senderName: updated.requester.name,
+              senderRole: 'المورد',
+              openingBalance: openingBalNum.toString(),
+              creditLimit: creditLimNum.toString(),
+            },
+          );
+        }
+
+        // 2. Notify the Requester (the Supplier): Customer accepted the connection
+        await this.notificationsService.sendPushNotification(
+          updated.requester.user.id,
+          'تم قبول طلب الارتباط',
+          `لقد قبل العميل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
+          {
+            type: 'connection_approved',
+            notificationType: 'connection_approved',
+            entityType: 'customer',
+            entityId: updated.id,
+            connectionId: updated.id,
+            route: `app://connection-request/${updated.id}`,
+            requestId: updated.id,
+            supplierId: updated.receiverId,
+            senderName: updated.receiver.name,
+            senderRole: 'العميل',
+            openingBalance: openingBalNum.toString(),
+            creditLimit: creditLimNum.toString(),
+          },
+        );
+      } else {
+        // ── SCENARIO B: Request originated from SUPPLIERS window ──
+        // The Counterpart (the Supplier) accepted and entered opening balance / credit limit.
+        // Notify the Requester (the Customer): The Supplier accepted and set terms.
+        const notifTitle = hasFinancialTerms ? 'تفعيل الرصيد وسقف المديونية' : 'تم قبول طلب الارتباط';
+        const notifBody = hasFinancialTerms
+          ? `قام المورد ${updated.receiver.name} بتفعيل ${termsSummary}.`
+          : `لقد قبل المورد ${updated.receiver.name} طلب الارتباط الخاص بك.`;
+        const notifType = hasFinancialTerms ? 'OPENING_BALANCE' : 'connection_approved';
+
+        await this.notificationsService.sendPushNotification(
+          updated.requester.user.id,
+          notifTitle,
+          notifBody,
+          {
+            type: notifType,
+            notificationType: notifType,
+            entityType: 'supplier',
+            entityId: updated.id,
+            connectionId: updated.id,
+            route: `app://connection-request/${updated.id}`,
+            requestId: updated.id,
+            supplierId: updated.receiverId,
+            senderName: updated.receiver.name,
+            senderRole: 'المورد',
+            openingBalance: openingBalNum.toString(),
+            creditLimit: creditLimNum.toString(),
+          },
+        );
+      }
 
       this.eventsGateway.emitToBusiness(
         updated.requesterId,
@@ -517,6 +561,14 @@ export class ConnectionsService {
         {
           id: updated.id,
           receiverName: updated.receiver.name,
+        },
+      );
+      this.eventsGateway.emitToBusiness(
+        updated.receiverId,
+        'CONNECTION_ACCEPTED',
+        {
+          id: updated.id,
+          requesterName: updated.requester.name,
         },
       );
 

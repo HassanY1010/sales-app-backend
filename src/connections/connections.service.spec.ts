@@ -211,9 +211,10 @@ describe('ConnectionsService - Relationship Requests & Edge Cases', () => {
       prisma.connection.update.mockResolvedValue({
         ...pendingConn,
         status: 'ACCEPTED',
+        requestSource: 'SUPPLIERS',
         account: { id: 'acc-1', balance: 0 },
         requester: { name: 'المورد الشامل', user: { id: 'user-supplier' } },
-        receiver: { name: 'متجر التجزئة' },
+        receiver: { name: 'متجر التجزئة', user: { id: 'user-receiver' } },
       });
 
       await service.acceptConnection('biz-receiver', 'user-receiver', 'conn-supplier-req', {
