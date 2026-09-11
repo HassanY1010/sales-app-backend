@@ -344,7 +344,7 @@ export class FinanceService {
 
     // 7. Send Real-time Notification
     if (!skipNotification) {
-      await this.notifyFinancialMovement(params, newBalance, transaction.id);
+      await this.notifyFinancialMovement(params, newBalance, transaction.id, tx);
     }
 
     return { transaction, newBalance };
@@ -360,15 +360,21 @@ export class FinanceService {
     return `${prefixMap[type]}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
   }
 
-  private async notifyFinancialMovement(params: any, newBalance: Decimal, transactionId?: string) {
+  private async notifyFinancialMovement(
+    params: any,
+    newBalance: Decimal,
+    transactionId?: string,
+    tx?: Prisma.TransactionClient,
+  ) {
     const { senderId, receiverId, amount, type, orderId, note } = params;
+    const client = tx || this.prisma;
 
     // Fetch participants for notification
-    const sender = await this.prisma.business.findUnique({
+    const sender = await client.business.findUnique({
       where: { id: senderId },
       include: { user: true },
     });
-    const receiver = await this.prisma.business.findUnique({
+    const receiver = await client.business.findUnique({
       where: { id: receiverId },
       include: { user: true },
     });
