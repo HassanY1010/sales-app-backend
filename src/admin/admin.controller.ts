@@ -29,6 +29,7 @@ import {
   UpdateOrderStatusDto,
 } from './dto/admin-order.dto';
 import { AdminTransactionsQueryDto } from './dto/admin-transaction.dto';
+import { AdminSuggestionsQueryDto } from './dto/admin-suggestion.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { AdjustmentRequestsService } from '../adjustment-requests/adjustment-requests.service';
 
@@ -288,7 +289,7 @@ export class AdminController {
   // ==================== Suggestions ====================
   @Get('suggestions')
   @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
-  getSuggestions(@Query() query: PaginationDto & { status?: string; search?: string }) {
+  getSuggestions(@Query() query: AdminSuggestionsQueryDto) {
     return this.adminService.getSuggestions(query);
   }
 
