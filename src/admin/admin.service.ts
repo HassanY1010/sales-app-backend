@@ -1356,6 +1356,32 @@ export class AdminService {
     });
   }
 
+  async getSuggestionById(suggestionId: string) {
+    const suggestion = await this.prisma.suggestion.findUnique({
+      where: { id: suggestionId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            phoneNumber: true,
+            userType: true,
+            business: {
+              select: { name: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!suggestion) {
+      throw new NotFoundException('الشكوى / الاقتراح غير موجود');
+    }
+
+    return suggestion;
+  }
+
   // ==================== Audit Logs ====================
   async getAuditLogs(
     query: PaginationDto & {

@@ -171,6 +171,80 @@ describe('AdminService', () => {
   });
 
   // ----------------------------------------------------------------
+  // getSuggestionById
+  // ----------------------------------------------------------------
+  describe('getSuggestionById', () => {
+    it('should throw NotFoundException if suggestion does not exist', async () => {
+      mockPrisma.suggestion.findUnique.mockResolvedValue(null);
+      await expect(
+        service.getSuggestionById('nonexistent-id'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should return suggestion with user details when found', async () => {
+      const mockSuggestion = {
+        id: 'sug-123',
+        content: 'شكوى تجريبية',
+        status: 'OPEN',
+        user: {
+          id: 'user-1',
+          fullName: 'عميل تجريبي',
+          phoneNumber: '777000000',
+        },
+      };
+      mockPrisma.suggestion.findUnique.mockResolvedValue(mockSuggestion);
+
+      const result = await service.getSuggestionById('sug-123');
+      expect(result).toEqual(mockSuggestion);
+      expect(mockPrisma.suggestion.findUnique).toHaveBeenCalledWith({
+        where: { id: 'sug-123' },
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phoneNumber: true,
+              userType: true,
+              business: {
+                select: { name: true },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it('notification deep link should open the exact suggestion even when it is not in the current page', async () => {
+      // Suppose there are 50 complaints in DB and the requested item is on page 5 (#45)
+      const targetSuggestion = {
+        id: 'suggestion-page-5-item-45',
+        content: 'شكوى قديمة في صفحة متأخرة',
+        status: 'OPEN',
+        user: {
+          id: 'user-distant',
+          fullName: 'عميل سابق',
+          phoneNumber: '770000000',
+          business: { name: 'متجر قديم' },
+        },
+      };
+
+      mockPrisma.suggestion.findUnique.mockResolvedValue(targetSuggestion);
+
+      // Fetching directly by ID bypasses pagination and loads the exact item
+      const fetched = await service.getSuggestionById('suggestion-page-5-item-45');
+
+      expect(fetched).toBeDefined();
+      expect(fetched.id).toBe('suggestion-page-5-item-45');
+      expect(fetched.content).toBe('شكوى قديمة في صفحة متأخرة');
+      expect(mockPrisma.suggestion.findUnique).toHaveBeenCalledWith({
+        where: { id: 'suggestion-page-5-item-45' },
+        include: expect.any(Object),
+      });
+    });
+  });
+
+  // ----------------------------------------------------------------
   // getFinancialReport — BUG-04 fix (uses aggregate, not findMany)
   // ----------------------------------------------------------------
   describe('getFinancialReport', () => {

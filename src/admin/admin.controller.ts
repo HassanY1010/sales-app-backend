@@ -292,6 +292,12 @@ export class AdminController {
     return this.adminService.getSuggestions(query);
   }
 
+  @Get('suggestions/:id')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'SUPPORT')
+  getSuggestionById(@Param('id') id: string) {
+    return this.adminService.getSuggestionById(id);
+  }
+
   @Put('suggestions/:id/status')
   @Roles('SUPER_ADMIN', 'ADMIN')
   updateSuggestionStatus(

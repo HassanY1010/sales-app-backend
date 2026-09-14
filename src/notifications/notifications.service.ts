@@ -135,7 +135,7 @@ export class NotificationsService {
 
     // 1. Resolve entityId from common keys
     if (!payload.entityId) {
-      const rawId = payload.recordId || payload.orderId || payload.connectionId || payload.transactionId || payload.paymentRequestId || payload.commissionId || payload.requestId;
+      const rawId = payload.recordId || payload.orderId || payload.connectionId || payload.transactionId || payload.paymentRequestId || payload.commissionId || payload.requestId || payload.suggestionId || payload.complaintId;
       if (rawId) {
         payload.entityId = String(rawId);
       }
@@ -159,6 +159,8 @@ export class NotificationsService {
         payload.entityType = 'DELIVERY_REPRESENTATIVE';
       } else if (typeLower.includes('subscription')) {
         payload.entityType = 'subscription';
+      } else if (typeLower.includes('suggestion') || typeLower.includes('complaint')) {
+        payload.entityType = 'suggestion';
       } else if (typeLower.includes('password')) {
         payload.entityType = 'USER';
         payload.route = '/change-password';
@@ -201,6 +203,10 @@ export class NotificationsService {
           break;
         case 'subscription':
           payload.route = payload.type === 'SUBSCRIPTION_EXPIRED' ? '/subscription-expired' : '/settings/subscription';
+          break;
+        case 'suggestion':
+        case 'complaint':
+          payload.route = entId ? `/dashboard/suggestions?id=${entId}` : `/dashboard/suggestions`;
           break;
         default:
           payload.route = `/notifications`;

@@ -33,6 +33,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else {
         message = exceptionResponse;
       }
+    } else if (
+      exception &&
+      typeof exception === 'object' &&
+      (exception as any).code === 'P2002'
+    ) {
+      // Prisma Unique Constraint Violation
+      status = HttpStatus.CONFLICT;
+      message = 'تعذر إتمام العملية بسبب تكرار البيانات (رقم الفاتورة أو المعرف موجود مسبقاً)';
     } else if (exception instanceof Error && !isProduction) {
       message = exception.message;
     }

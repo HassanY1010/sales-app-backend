@@ -245,5 +245,115 @@ describe('ConnectionsService - Relationship Requests & Edge Cases', () => {
         }),
       );
     });
+
+    it('accepts successfully when request originated from CUSTOMERS screen without crash even if receiver.user was initially bare', async () => {
+      const { prisma, notificationsService, service } = createService();
+      const pendingConn = {
+        id: 'conn-customer-req',
+        requesterId: 'biz-supplier',
+        receiverId: 'biz-customer',
+        status: 'PENDING',
+        connectionType: 'CUSTOMER',
+        requestSource: 'CUSTOMERS',
+        requiresReceiverInput: false,
+        pendingOpenBalance: 1000,
+        pendingCreditLimit: 50000,
+        account: null,
+      };
+
+      prisma.connection.findUnique
+        .mockResolvedValueOnce(pendingConn)
+        .mockResolvedValueOnce(pendingConn)
+        .mockResolvedValueOnce({
+          ...pendingConn,
+          status: 'ACCEPTED',
+          account: { id: 'acc-2', balance: 0 },
+          requester: { name: 'المورد', userId: 'user-supplier-biz', user: { id: 'user-supplier' } },
+          receiver: { name: 'العميل', userId: 'user-customer-biz', user: { id: 'user-customer' } },
+        });
+      prisma.account.findUnique.mockResolvedValue(null);
+      prisma.connection.update.mockResolvedValue({
+        ...pendingConn,
+        status: 'ACCEPTED',
+        account: { id: 'acc-2', balance: 0 },
+        requester: { name: 'المورد', userId: 'user-supplier-biz', user: { id: 'user-supplier' } },
+        receiver: { name: 'العميل', userId: 'user-customer-biz', user: { id: 'user-customer' } },
+      });
+
+      const result = await service.acceptConnection('biz-customer', 'user-customer', 'conn-customer-req', {});
+
+      expect(result).toBeDefined();
+      expect(result.status).toBe('ACCEPTED');
+      expect(notificationsService.sendPushNotification).toHaveBeenCalled();
+    });
+
+    it('rejects connection successfully and notifies the requester', async () => {
+      const { prisma, notificationsService, service } = createService();
+      const pendingConn = {
+        id: 'conn-to-reject',
+        requesterId: 'biz-requester',
+        receiverId: 'biz-receiver',
+        status: 'PENDING',
+      };
+
+      prisma.connection.findUnique.mockResolvedValue(pendingConn);
+      prisma.connection.update.mockResolvedValue({
+        ...pendingConn,
+        status: 'REJECTED',
+        requester: { name: 'المرسل', userId: 'user-requester-biz', user: { id: 'user-requester' } },
+        receiver: { name: 'المستلم', userId: 'user-receiver-biz', user: { id: 'user-receiver' } },
+      });
+
+      const result = await service.rejectConnection('biz-receiver', 'user-receiver', 'conn-to-reject');
+
+      expect(result).toBeDefined();
+      expect(result.status).toBe('REJECTED');
+      expect(prisma.connection.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'conn-to-reject' },
+          data: { status: 'REJECTED' },
+          include: expect.objectContaining({
+            requester: { include: { user: true } },
+            receiver: { include: { user: true } },
+          }),
+        }),
+      );
+      expect(notificationsService.sendPushNotification).toHaveBeenCalledWith(
+        'user-requester',
+        'تم رفض طلب الارتباط',
+        expect.stringContaining('المستلم'),
+        expect.objectContaining({
+          type: 'connection_rejected',
+          entityId: 'conn-to-reject',
+        }),
+      );
+    });
+
+    it('rejectConnection throws BadRequestException if user is not the receiver', async () => {
+      const { prisma, service } = createService();
+      prisma.connection.findUnique.mockResolvedValue({
+        id: 'conn-123',
+        receiverId: 'biz-other',
+        status: 'PENDING',
+      });
+
+      await expect(
+        service.rejectConnection('biz-me', 'user-me', 'conn-123'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejectConnection throws BadRequestException if status is not PENDING', async () => {
+      const { prisma, service } = createService();
+      prisma.connection.findUnique.mockResolvedValue({
+        id: 'conn-123',
+        receiverId: 'biz-me',
+        status: 'ACCEPTED',
+      });
+
+      await expect(
+        service.rejectConnection('biz-me', 'user-me', 'conn-123'),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 });
+

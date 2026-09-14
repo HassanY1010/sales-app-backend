@@ -253,7 +253,7 @@ export class OrdersService {
       });
 
       return this.sanitizeOrderForBusiness(order, senderId);
-    }, { timeout: 30000 });
+    }, { timeout: 60000, maxWait: 20000 });
   }
 
   async getOrders(businessId: string, pagination: PaginationDto) {

@@ -404,7 +404,7 @@ export class ConnectionsService {
         include: {
           account: true,
           requester: { include: { user: true } },
-          receiver: true,
+          receiver: { include: { user: true } },
           customerLinks: {
             where: { status: 'ACTIVE' },
             include: { supplier: { include: { requester: true, receiver: true } } },
@@ -464,7 +464,6 @@ export class ConnectionsService {
       const rawReqSource = (updated.requestSource || '').toUpperCase();
       const rawConnType = (updated.connectionType || '').toUpperCase();
       const isRequesterSupplier = rawReqSource === 'CUSTOMERS' || (rawReqSource === '' && rawConnType === 'CUSTOMER');
-      const isRequesterCustomer = rawReqSource === 'SUPPLIERS' || (rawReqSource === '' && rawConnType === 'SUPPLIER');
 
       const openingBalNum = Number(openingBalance || 0);
       const creditLimNum = Number(creditLimit || 0);
@@ -479,98 +478,111 @@ export class ConnectionsService {
       }
       const termsSummary = termsParts.join(' و ');
 
-      if (isRequesterSupplier) {
-        // ── SCENARIO A: Request originated from CUSTOMERS window ──
-        // 1. Notify the Receiver (the Customer): The Supplier set their opening balance / credit limit
-        if (hasFinancialTerms) {
-          await this.notificationsService.sendPushNotification(
-            updated.receiver.user.id,
-            'تفعيل الرصيد وسقف المديونية',
-            `قام المورد ${updated.requester.name} بتفعيل ${termsSummary}.`,
-            {
-              type: 'OPENING_BALANCE',
-              notificationType: 'OPENING_BALANCE',
-              entityType: 'supplier',
-              entityId: updated.id,
-              connectionId: updated.id,
-              route: `app://connection-request/${updated.id}`,
-              requestId: updated.id,
-              supplierId: updated.requesterId,
-              senderName: updated.requester.name,
-              senderRole: 'المورد',
-              openingBalance: openingBalNum.toString(),
-              creditLimit: creditLimNum.toString(),
-            },
-          );
+      try {
+        const receiverUserId = updated.receiver?.user?.id || updated.receiver?.userId;
+        const requesterUserId = updated.requester?.user?.id || updated.requester?.userId;
+
+        if (isRequesterSupplier) {
+          // ── SCENARIO A: Request originated from CUSTOMERS window ──
+          // 1. Notify the Receiver (the Customer): The Supplier set their opening balance / credit limit
+          if (hasFinancialTerms && receiverUserId) {
+            await this.notificationsService.sendPushNotification(
+              receiverUserId,
+              'تفعيل الرصيد وسقف المديونية',
+              `قام المورد ${updated.requester?.name ?? ''} بتفعيل ${termsSummary}.`,
+              {
+                type: 'OPENING_BALANCE',
+                notificationType: 'OPENING_BALANCE',
+                entityType: 'supplier',
+                entityId: updated.id,
+                connectionId: updated.id,
+                route: `app://connection-request/${updated.id}`,
+                requestId: updated.id,
+                supplierId: updated.requesterId,
+                senderName: updated.requester?.name ?? '',
+                senderRole: 'المورد',
+                openingBalance: openingBalNum.toString(),
+                creditLimit: creditLimNum.toString(),
+              },
+            );
+          }
+
+          // 2. Notify the Requester (the Supplier): Customer accepted the connection
+          if (requesterUserId) {
+            await this.notificationsService.sendPushNotification(
+              requesterUserId,
+              'تم قبول طلب الارتباط',
+              `لقد قبل العميل ${updated.receiver?.name ?? ''} طلب الارتباط الخاص بك.`,
+              {
+                type: 'connection_approved',
+                notificationType: 'connection_approved',
+                entityType: 'customer',
+                entityId: updated.id,
+                connectionId: updated.id,
+                route: `app://connection-request/${updated.id}`,
+                requestId: updated.id,
+                supplierId: updated.receiverId,
+                senderName: updated.receiver?.name ?? '',
+                senderRole: 'العميل',
+                openingBalance: openingBalNum.toString(),
+                creditLimit: creditLimNum.toString(),
+              },
+            );
+          }
+        } else {
+          // ── SCENARIO B: Request originated from SUPPLIERS window ──
+          if (requesterUserId) {
+            const notifTitle = hasFinancialTerms ? 'تفعيل الرصيد وسقف المديونية' : 'تم قبول طلب الارتباط';
+            const notifBody = hasFinancialTerms
+              ? `قام المورد ${updated.receiver?.name ?? ''} بتفعيل ${termsSummary}.`
+              : `لقد قبل المورد ${updated.receiver?.name ?? ''} طلب الارتباط الخاص بك.`;
+            const notifType = hasFinancialTerms ? 'OPENING_BALANCE' : 'connection_approved';
+
+            await this.notificationsService.sendPushNotification(
+              requesterUserId,
+              notifTitle,
+              notifBody,
+              {
+                type: notifType,
+                notificationType: notifType,
+                entityType: 'supplier',
+                entityId: updated.id,
+                connectionId: updated.id,
+                route: `app://connection-request/${updated.id}`,
+                requestId: updated.id,
+                supplierId: updated.receiverId,
+                senderName: updated.receiver?.name ?? '',
+                senderRole: 'المورد',
+                openingBalance: openingBalNum.toString(),
+                creditLimit: creditLimNum.toString(),
+              },
+            );
+          }
         }
-
-        // 2. Notify the Requester (the Supplier): Customer accepted the connection
-        await this.notificationsService.sendPushNotification(
-          updated.requester.user.id,
-          'تم قبول طلب الارتباط',
-          `لقد قبل العميل ${updated.receiver.name} طلب الارتباط الخاص بك.`,
-          {
-            type: 'connection_approved',
-            notificationType: 'connection_approved',
-            entityType: 'customer',
-            entityId: updated.id,
-            connectionId: updated.id,
-            route: `app://connection-request/${updated.id}`,
-            requestId: updated.id,
-            supplierId: updated.receiverId,
-            senderName: updated.receiver.name,
-            senderRole: 'العميل',
-            openingBalance: openingBalNum.toString(),
-            creditLimit: creditLimNum.toString(),
-          },
-        );
-      } else {
-        // ── SCENARIO B: Request originated from SUPPLIERS window ──
-        // The Counterpart (the Supplier) accepted and entered opening balance / credit limit.
-        // Notify the Requester (the Customer): The Supplier accepted and set terms.
-        const notifTitle = hasFinancialTerms ? 'تفعيل الرصيد وسقف المديونية' : 'تم قبول طلب الارتباط';
-        const notifBody = hasFinancialTerms
-          ? `قام المورد ${updated.receiver.name} بتفعيل ${termsSummary}.`
-          : `لقد قبل المورد ${updated.receiver.name} طلب الارتباط الخاص بك.`;
-        const notifType = hasFinancialTerms ? 'OPENING_BALANCE' : 'connection_approved';
-
-        await this.notificationsService.sendPushNotification(
-          updated.requester.user.id,
-          notifTitle,
-          notifBody,
-          {
-            type: notifType,
-            notificationType: notifType,
-            entityType: 'supplier',
-            entityId: updated.id,
-            connectionId: updated.id,
-            route: `app://connection-request/${updated.id}`,
-            requestId: updated.id,
-            supplierId: updated.receiverId,
-            senderName: updated.receiver.name,
-            senderRole: 'المورد',
-            openingBalance: openingBalNum.toString(),
-            creditLimit: creditLimNum.toString(),
-          },
-        );
+      } catch (err) {
+        console.error('Failed to send connection accept notifications:', err);
       }
 
-      this.eventsGateway.emitToBusiness(
-        updated.requesterId,
-        'CONNECTION_ACCEPTED',
-        {
-          id: updated.id,
-          receiverName: updated.receiver.name,
-        },
-      );
-      this.eventsGateway.emitToBusiness(
-        updated.receiverId,
-        'CONNECTION_ACCEPTED',
-        {
-          id: updated.id,
-          requesterName: updated.requester.name,
-        },
-      );
+      try {
+        this.eventsGateway.emitToBusiness(
+          updated.requesterId,
+          'CONNECTION_ACCEPTED',
+          {
+            id: updated.id,
+            receiverName: updated.receiver?.name ?? '',
+          },
+        );
+        this.eventsGateway.emitToBusiness(
+          updated.receiverId,
+          'CONNECTION_ACCEPTED',
+          {
+            id: updated.id,
+            requesterName: updated.requester?.name ?? '',
+          },
+        );
+      } catch (err) {
+        console.error('Failed to emit CONNECTION_ACCEPTED events:', err);
+      }
 
       const freshConnection = await prisma.connection.findUnique({
         where: { id: connectionId },
@@ -617,7 +629,7 @@ export class ConnectionsService {
       },
       include: {
         requester: { include: { user: true } },
-        receiver: true,
+        receiver: { include: { user: true } },
       },
     });
 
@@ -637,28 +649,39 @@ export class ConnectionsService {
     });
 
     // Notify the requester
-    await this.notificationsService.sendPushNotification(
-      updated.requester.user.id,
-      'تم رفض طلب الارتباط',
-      `لقد تم رفض طلب الارتباط من قبل ${updated.receiver?.name ?? 'المستلم'}.`,
-      {
-        type: 'connection_rejected',
-        notificationType: 'connection_rejected',
-        entityType: 'connection_request',
-        entityId: updated.id,
-        route: `app://connection-request/${updated.id}`,
-        requestId: updated.id,
-      },
-    );
+    try {
+      const requesterUserId = updated.requester?.user?.id || updated.requester?.userId;
+      if (requesterUserId) {
+        await this.notificationsService.sendPushNotification(
+          requesterUserId,
+          'تم رفض طلب الارتباط',
+          `لقد تم رفض طلب الارتباط من قبل ${updated.receiver?.name ?? 'المستلم'}.`,
+          {
+            type: 'connection_rejected',
+            notificationType: 'connection_rejected',
+            entityType: 'connection_request',
+            entityId: updated.id,
+            route: `app://connection-request/${updated.id}`,
+            requestId: updated.id,
+          },
+        );
+      }
+    } catch (err) {
+      console.error('Failed to send connection reject notification:', err);
+    }
 
-    this.eventsGateway.emitToBusiness(
-      updated.requesterId,
-      'CONNECTION_REJECTED',
-      {
-        id: updated.id,
-        receiverName: updated.receiver?.name ?? '',
-      },
-    );
+    try {
+      this.eventsGateway.emitToBusiness(
+        updated.requesterId,
+        'CONNECTION_REJECTED',
+        {
+          id: updated.id,
+          receiverName: updated.receiver?.name ?? '',
+        },
+      );
+    } catch (err) {
+      console.error('Failed to emit CONNECTION_REJECTED event:', err);
+    }
 
     return this.normalizeConnection(updated, businessId);
   }
