@@ -128,12 +128,16 @@ export class OrdersService {
       const unitPrice = pricesVisible
         ? new Decimal(item.unitPrice || '0')
         : new Decimal(0);
-      const total = unitPrice.mul(item.quantity);
+      const quantity = Math.max(1, Math.round(Number(item.quantity) || 1));
+      const total = unitPrice.mul(quantity);
       subtotal = subtotal.plus(total);
       return {
-        ...item,
+        itemName: item.itemName,
+        description: item.description ?? null,
+        quantity,
         unitPrice: unitPrice.toString(),
         total: total.toString(),
+        unit: item.unit ?? null,
       };
     });
 

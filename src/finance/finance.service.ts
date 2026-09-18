@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { Decimal } from 'decimal.js';
@@ -14,6 +15,8 @@ import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class FinanceService {
+  private readonly logger = new Logger(FinanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
@@ -384,22 +387,26 @@ export class FinanceService {
     if (type === 'PAYMENT') {
       // Send notification ONLY to the customer (client) who made the payment, not the merchant
       if (sender?.user?.id) {
-        await this.notificationsService.sendPushNotification(
-          sender.user.id,
-          'تم تسجيل سند قبض',
-          `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
-          {
-            type: 'PAYMENT_RECEIVED',
-            notificationType: 'payment_received',
-            entityType: 'payment',
-            entityId: transactionId,
-            recordId: transactionId,
-            transactionId: transactionId,
-            amount: amountStr,
-            transactionType: type,
-            route: `/receipt-vouchers/${transactionId}`,
-          },
-        );
+        try {
+          await this.notificationsService.sendPushNotification(
+            sender.user.id,
+            'تم تسجيل سند قبض',
+            `تم تسجيل سند قبض بمبلغ ${amountStr} لصالح ${receiver?.name}. الرصيد الحالي: ${newBalance.toFixed(2)}`,
+            {
+              type: 'PAYMENT_RECEIVED',
+              notificationType: 'payment_received',
+              entityType: 'payment',
+              entityId: transactionId,
+              recordId: transactionId,
+              transactionId: transactionId,
+              amount: amountStr,
+              transactionType: type,
+              route: `/receipt-vouchers/${transactionId}`,
+            },
+          );
+        } catch (err: any) {
+          this.logger.error(`Failed to send payment push notification: ${err.message}`);
+        }
 
         this.eventsGateway.emitToBusiness(senderId, 'FINANCIAL_UPDATE', {
           type,
@@ -434,23 +441,27 @@ export class FinanceService {
         break;
     }
 
-    if (title) {
+    if (title && receiver?.user?.id) {
       const notificationType = type === 'ADJUSTMENT' ? 'OPENING_BALANCE' : (orderId ? 'order' : 'receipt_voucher');
-      await this.notificationsService.sendPushNotification(
-        receiver.user.id,
-        title,
-        body,
-        {
-          type: notificationType,
-          notificationType: notificationType,
-          entityType: type === 'ADJUSTMENT' ? 'opening_balance' : (orderId ? 'order' : 'invoice'),
-          amount: amountStr,
-          transactionType: type,
-          recordId: orderId || transactionId,
-          orderId: orderId,
-          transactionId: transactionId,
-        },
-      );
+      try {
+        await this.notificationsService.sendPushNotification(
+          receiver.user.id,
+          title,
+          body,
+          {
+            type: notificationType,
+            notificationType: notificationType,
+            entityType: type === 'ADJUSTMENT' ? 'opening_balance' : (orderId ? 'order' : 'invoice'),
+            amount: amountStr,
+            transactionType: type,
+            recordId: orderId || transactionId,
+            orderId: orderId,
+            transactionId: transactionId,
+          },
+        );
+      } catch (err: any) {
+        this.logger.error(`Failed to send financial push notification: ${err.message}`);
+      }
 
       this.eventsGateway.emitToBusiness(receiverId, 'FINANCIAL_UPDATE', {
         type,
