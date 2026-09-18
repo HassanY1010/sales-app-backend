@@ -835,5 +835,98 @@ describe('OrdersService', () => {
         }),
       );
     });
+
+    it('should successfully send purchase order to supplier when supplier has no user account without 500 error', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-supp-test',
+        requesterId: 'merchant-1',
+        receiverId: 'supp-shadow-1',
+        status: 'ACCEPTED',
+        connectionType: 'SUPPLIER',
+        showPrices: false,
+        account: {
+          id: 'acc-supp-test',
+          balance: 0,
+          totalCredit: 0,
+          totalDebit: 0,
+          creditLimit: 100000,
+          currency: 'YER',
+        },
+      });
+
+      // Crucial part: receiver business (supplier) has null user record
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => {
+        if (where.id === 'merchant-1') {
+          return { id: 'merchant-1', name: 'التاجر المشتري', user: { id: 'user-merchant', userType: 'business' } };
+        }
+        return { id: 'supp-shadow-1', name: 'مورد الجملة', user: null }; // user is null!
+      });
+
+      mockInvoiceNumberService.getNextOrderNumber.mockResolvedValue('PO-101');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-po-101',
+        orderNumber: 'PO-101',
+        senderId: 'merchant-1',
+        receiverId: 'supp-shadow-1',
+        connectionId: 'conn-supp-test',
+        status: 'PENDING',
+        pricesVisible: false,
+        total: '0',
+        items: [{ itemName: 'ش.ص', quantity: 1, unitPrice: '0', total: '0', unit: 'كرتون' }],
+      });
+
+      // Simulate sending purchase order from create_purchase_order_screen.dart
+      const result = await service.createOrder(
+        'merchant-1',
+        {
+          receiverId: 'supp-shadow-1',
+          connectionId: 'conn-supp-test',
+          accountRole: 'SUPPLIER',
+          isSupplier: true,
+          pricesVisible: false,
+          isCash: false,
+          notes: 'طلب توريد من التطبيق',
+          discount: '0',
+          paidAmount: '0',
+          currency: 'YER',
+          items: [
+            {
+              itemName: 'ش.ص',
+              quantity: 1,
+              unitPrice: '0',
+              unit: 'كرتون',
+            },
+          ],
+        } as any,
+        'business',
+      );
+
+      expect(result).toBeDefined();
+      expect(result.orderNumber).toBe('PO-101');
+      expect(result.status).toBe('PENDING');
+      expect(mockPrisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            orderNumber: 'PO-101',
+            senderId: 'merchant-1',
+            receiverId: 'supp-shadow-1',
+            status: 'PENDING',
+            pricesVisible: false,
+            items: {
+              create: [
+                {
+                  itemName: 'ش.ص',
+                  description: null,
+                  quantity: 1,
+                  unitPrice: '0',
+                  total: '0',
+                  unit: 'كرتون',
+                },
+              ],
+            },
+          }),
+        }),
+      );
+    });
   });
 });
