@@ -112,7 +112,7 @@ export class OrdersService {
 
     if (
       userType === 'individual' &&
-      receiverBusiness.user.userType !== 'business'
+      receiverBusiness.user?.userType !== 'business'
     ) {
       throw new ForbiddenException(
         'المستهلك يمكنه إرسال طلبيات شراء لحسابات تجارية فقط',
