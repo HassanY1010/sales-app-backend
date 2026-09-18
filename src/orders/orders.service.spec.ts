@@ -742,5 +742,98 @@ describe('OrdersService', () => {
         }),
       );
     });
+
+    it('should successfully save sales invoice with sanitized items and when receiver has no user.id', async () => {
+      mockPrisma.connection.findFirst.mockResolvedValue({
+        id: 'conn-safe-test',
+        requesterId: 'merchant-1',
+        receiverId: 'shadow-cust-1',
+        status: 'ACCEPTED',
+        connectionType: 'CUSTOMER',
+        showPrices: true,
+        account: {
+          id: 'acc-safe-test',
+          balance: 0,
+          totalCredit: 0,
+          totalDebit: 0,
+          creditLimit: 50000,
+          currency: 'YER',
+        },
+      });
+
+      mockPrisma.business.findUnique.mockImplementation(async ({ where }: any) => {
+        if (where.id === 'merchant-1') {
+          return { id: 'merchant-1', name: 'التاجر', user: { id: 'user-merchant', userType: 'business' } };
+        }
+        return { id: 'shadow-cust-1', name: 'عميل محلي', user: null }; // user is null (shadow customer)
+      });
+
+      mockInvoiceNumberService.getNextInvoiceNumber.mockResolvedValue('105');
+      mockPrisma.order.create.mockResolvedValue({
+        id: 'ord-safe-105',
+        orderNumber: '105',
+        senderId: 'merchant-1',
+        receiverId: 'shadow-cust-1',
+        connectionId: 'conn-safe-test',
+        status: 'ISSUED',
+        total: '2000',
+        items: [{ itemName: 'كرتون عصير', quantity: 1, unitPrice: '2000', total: '2000', unit: 'كرتون' }],
+      });
+
+      const result = await service.createOrder(
+        'merchant-1',
+        {
+          receiverId: 'shadow-cust-1',
+          connectionId: 'conn-safe-test',
+          accountRole: 'CUSTOMER',
+          isCash: false,
+          notes: 'طلب مبيعات من التطبيق',
+          discount: '0',
+          paidAmount: '0',
+          currency: 'YER',
+          items: [
+            {
+              itemName: 'كرتون عصير',
+              quantity: 1,
+              unitPrice: '2000',
+              unit: 'كرتون',
+            },
+          ],
+        } as any,
+        'business',
+      );
+
+      expect(result).toBeDefined();
+      expect(mockPrisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            orderNumber: '105',
+            senderId: 'merchant-1',
+            receiverId: 'shadow-cust-1',
+            items: {
+              create: [
+                {
+                  itemName: 'كرتون عصير',
+                  description: null,
+                  quantity: 1,
+                  unitPrice: '2000',
+                  total: '2000',
+                  unit: 'كرتون',
+                },
+              ],
+            },
+          }),
+        }),
+      );
+      expect(mockFinanceService.recordFinancialMovement).toHaveBeenCalledWith(
+        mockPrisma,
+        expect.objectContaining({
+          senderId: 'merchant-1',
+          receiverId: 'shadow-cust-1',
+          type: 'SALE',
+          amount: '2000',
+        }),
+      );
+    });
   });
 });
