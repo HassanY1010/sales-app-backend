@@ -150,8 +150,8 @@ export class OrdersService {
       : Decimal.min(new Decimal(dto.paidAmount || '0'), finalTotal);
 
     if (!isCash && pricesVisible) {
-      const currentDebit = new Decimal(connection.account.totalDebit as any);
-      const creditLimit = new Decimal(connection.account.creditLimit as any);
+      const currentDebit = new Decimal(connection.account.totalDebit?.toString() ?? '0');
+      const creditLimit = new Decimal(connection.account.creditLimit?.toString() ?? '0');
       const remainingDebt = finalTotal.minus(paidAmount);
       const newDebt = currentDebit.plus(remainingDebt);
       
@@ -175,88 +175,106 @@ export class OrdersService {
       : connection.account.dueDate;
 
     return this.prisma.$transaction(async (prisma) => {
-      // Decouple Purchase Orders counter from Sales Invoices counter:
-      // When pricesVisible is false (or supplier purchase order), use independent order counter.
-      // When pricesVisible is true (sales invoice), use independent invoice counter.
-      const orderNumber = pricesVisible
-        ? await this.invoiceNumberService.getNextInvoiceNumber(senderId, prisma)
-        : await this.invoiceNumberService.getNextOrderNumber(senderId, prisma);
+      try {
+        // Decouple Purchase Orders counter from Sales Invoices counter:
+        // When pricesVisible is false (or supplier purchase order), use independent order counter.
+        // When pricesVisible is true (sales invoice), use independent invoice counter.
+        const orderNumber = pricesVisible
+          ? await this.invoiceNumberService.getNextInvoiceNumber(senderId, prisma)
+          : await this.invoiceNumberService.getNextOrderNumber(senderId, prisma);
 
-      const initialStatus = pricesVisible ? 'ISSUED' : 'PENDING';
-      const order = await prisma.order.create({
-        data: {
-          orderNumber,
-          clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
-          senderId,
-          receiverId: actualReceiverBusinessId,
-          connectionId: connection.id,
-          status: initialStatus,
-          isCash,
-          currency,
-          dueDate: dueDate ?? undefined,
-          pricesVisible,
-          priceAcceptedAt: pricesVisible ? new Date() : undefined,
-          subtotal: subtotal.toString(),
-          tax: taxAmount.toString(),
-          discount: discountAmount.toString(),
-          paidAmount: paidAmount.toString(),
-          total: finalTotal.toString(),
-          notes: dto.notes,
-          items: { create: itemsData },
-        },
-        include: { items: true, sender: true, receiver: true },
-      });
-
-      // ── Immediate Financial Movement for Invoices (Cash & Deferred) ──
-      // Note: Only sales invoices with visible prices record immediate movements.
-      // Purchase orders to suppliers start as PENDING with no immediate financial movement until accepted.
-      if (pricesVisible && !isPurchase) {
-        // 1. Record the SALE movement (Debits receiver's account / increases debt for customer by net remaining amount)
-        await this.financeService.recordFinancialMovement(prisma, {
-          senderId,
-          receiverId: actualReceiverBusinessId,
-          amount: finalTotal.toString(),
-          type: 'SALE',
-          orderId: order.id,
-          currency,
-          dueDate: dueDate ?? undefined,
-          note: isCash
-            ? `فاتورة مبيعات نقدية رقم ${orderNumber}`
-            : (paidAmount.greaterThan(0)
-                ? `فاتورة مبيعات جزئية رقم ${orderNumber} (المدفوع: ${paidAmount.toString()})`
-                : `فاتورة مبيعات آجلة رقم ${orderNumber}`),
-          connectionId: connection.id,
-          accountRole: 'CUSTOMER',
-        });
-      }
-
-      this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {
-        id: order.id,
-        orderNumber: order.orderNumber,
-        senderName: senderBusiness.name,
-        total: order.total,
-        pricesVisible: order.pricesVisible,
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          action: 'CREATE',
-          resource: 'ORDER',
-          resourceId: order.id,
-          details: {
+        const initialStatus = pricesVisible ? 'ISSUED' : 'PENDING';
+        const order = await prisma.order.create({
+          data: {
             orderNumber,
-            total: finalTotal.toString(),
-            paidAmount: paidAmount.toString(),
+            clientId: dto.clientId ?? undefined,  // Store device UUID for idempotency
+            senderId,
+            receiverId: actualReceiverBusinessId,
+            connectionId: connection.id,
+            status: initialStatus,
             isCash,
             currency,
-            dueDate,
+            dueDate: dueDate ?? undefined,
             pricesVisible,
-            itemsCount: dto.items.length,
+            priceAcceptedAt: pricesVisible ? new Date() : undefined,
+            subtotal: subtotal.toString(),
+            tax: taxAmount.toString(),
+            discount: discountAmount.toString(),
+            paidAmount: paidAmount.toString(),
+            total: finalTotal.toString(),
+            notes: dto.notes,
+            items: { create: itemsData },
           },
-        },
-      });
+          include: { items: true, sender: true, receiver: true },
+        });
 
-      return this.sanitizeOrderForBusiness(order, senderId);
+        // ── Immediate Financial Movement for Invoices (Cash & Deferred) ──
+        // Note: Only sales invoices with visible prices record immediate movements.
+        // Purchase orders to suppliers start as PENDING with no immediate financial movement until accepted.
+        if (pricesVisible && !isPurchase) {
+          // 1. Record the SALE movement (Debits receiver's account / increases debt for customer by net remaining amount)
+          await this.financeService.recordFinancialMovement(prisma, {
+            senderId,
+            receiverId: actualReceiverBusinessId,
+            amount: finalTotal.toString(),
+            type: 'SALE',
+            orderId: order.id,
+            currency,
+            dueDate: dueDate ?? undefined,
+            note: isCash
+              ? `فاتورة مبيعات نقدية رقم ${orderNumber}`
+              : (paidAmount.greaterThan(0)
+                  ? `فاتورة مبيعات جزئية رقم ${orderNumber} (المدفوع: ${paidAmount.toString()})`
+                  : `فاتورة مبيعات آجلة رقم ${orderNumber}`),
+            connectionId: connection.id,
+            accountRole: 'CUSTOMER',
+          });
+        }
+
+        this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          senderName: senderBusiness.name,
+          total: order.total,
+          pricesVisible: order.pricesVisible,
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            action: 'CREATE',
+            resource: 'ORDER',
+            resourceId: order.id,
+            details: {
+              orderNumber,
+              total: finalTotal.toString(),
+              paidAmount: paidAmount.toString(),
+              isCash,
+              currency,
+              dueDate,
+              pricesVisible,
+              itemsCount: dto.items.length,
+            },
+          },
+        });
+
+        return this.sanitizeOrderForBusiness(order, senderId);
+      } catch (err: any) {
+        // Log detailed error for debugging — 500 errors are otherwise opaque on Render
+        console.error('[createOrder] Transaction failed:', {
+          message: err?.message,
+          code: err?.code,
+          meta: err?.meta,
+          stack: err?.stack?.split('\n').slice(0, 8).join('\n'),
+          senderId,
+          receiverId: actualReceiverBusinessId,
+          connectionId: connection?.id,
+          pricesVisible,
+          isPurchase,
+          isCash,
+          finalTotal: finalTotal.toString(),
+        });
+        throw err;
+      }
     }, { timeout: 60000, maxWait: 20000 });
   }
 

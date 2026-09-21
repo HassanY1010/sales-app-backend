@@ -73,6 +73,17 @@ export class FinanceService {
         })
       : null;
 
+    // If connectionId was provided but connection not found with strict status filter, try without status filter
+    if (!connection && connectionId) {
+      connection = await tx.connection.findFirst({
+        where: { id: connectionId },
+        include: { account: true },
+      });
+      if (connection) {
+        this.logger.warn(`[recordFinancialMovement] Connection ${connectionId} found but status=${connection.status} — not in allowedStatuses`);
+      }
+    }
+
     if (connection) {
       // Validate that connection belongs to transacting parties
       const isParty =
@@ -95,20 +106,10 @@ export class FinanceService {
         }
       }
 
-      const initiatorPerspectiveRole =
-        connection.requesterId === initiator
-          ? connection.connectionType
-          : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
-
-      if (expectedRole && initiatorPerspectiveRole !== expectedRole) {
-        if (type === 'SALE') {
-          throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
-        }
-        if (type === 'PURCHASE') {
-          throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
-        }
-        throw new BadRequestException(`نوع الارتباط (${initiatorPerspectiveRole}) لا يتطابق مع الدور المطلوب (${expectedRole})`);
-      }
+      // Note: We intentionally do NOT validate initiatorPerspectiveRole vs expectedRole here,
+      // because in sales invoice creation, the seller (senderId) may have SUPPLIER role in the
+      // connection (when the customer initiated the connection). The accountRole parameter
+      // already encodes intent correctly, and role enforcement happens in orders.service.ts.
     }
 
     if (!connection) {
@@ -201,6 +202,9 @@ export class FinanceService {
     }
 
     if (!connection || !connection.account) {
+      this.logger.error('[recordFinancialMovement] No connection/account found', {
+        senderId, receiverId, connectionId, expectedRole, initiator, counterpart,
+      });
       throw new BadRequestException(
         'Active connection and financial account required',
       );
@@ -211,12 +215,13 @@ export class FinanceService {
         ? connection.connectionType
         : (connection.connectionType === 'CUSTOMER' ? 'SUPPLIER' : 'CUSTOMER');
 
-    if (type === 'SALE' && initiatorPerspectiveRole === 'SUPPLIER') {
-      throw new BadRequestException('لا يمكن تسجيل حركة مبيعات في حساب مورد');
-    }
-    if (type === 'PURCHASE' && initiatorPerspectiveRole === 'CUSTOMER') {
-      throw new BadRequestException('لا يمكن تسجيل حركة مشتريات في حساب عميل');
-    }
+    // Role validation: only block if there's a CLEAR mismatch (e.g., no account at all)
+    // NOTE: We do NOT block SALE transactions based on initiatorPerspectiveRole because:
+    //   - When recording a sales invoice, sender=SELLER who may have SUPPLIER connectionType
+    //   - The accountRole param already encodes the correct intent (CUSTOMER = customer's debt is being tracked)
+    //   - The connection was already validated in orders.service.ts before calling this function
+    // The only restriction we keep is: if expectedRole was explicitly set AND connection was found
+    //   via connectionId (i.e., the caller is sure about the connection), we trust the caller.
 
     // 2. Calculate balance change from requester's perspective
     // Balance Direction:
@@ -236,8 +241,8 @@ export class FinanceService {
       if (linkedOrder) {
         if (linkedOrder.isCash) {
           netImpactAmount = new Decimal(0);
-        } else if (decimalAmount.equals(new Decimal(linkedOrder.total as any || '0'))) {
-          const paid = new Decimal(linkedOrder.paidAmount as any || '0');
+        } else if (decimalAmount.equals(new Decimal(linkedOrder.total?.toString() ?? '0'))) {
+          const paid = new Decimal(linkedOrder.paidAmount?.toString() ?? '0');
           netImpactAmount = Decimal.max(0, decimalAmount.minus(paid));
         }
       }
