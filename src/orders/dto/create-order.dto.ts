@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -41,6 +41,7 @@ export class CreateOrderDto {
 
   @IsBoolean()
   @IsOptional()
+  @Transform(({ value }) => value === null ? undefined : value)
   pricesVisible?: boolean;
 
   @IsNumberString()

@@ -119,10 +119,24 @@ export class OrdersService {
       );
     }
 
-    // If it is a purchase order to a supplier (or explicitly pricesVisible is false), prices are NOT visible until supplier accepts
-    const pricesVisible = dto.pricesVisible !== undefined
-      ? dto.pricesVisible
-      : (isPurchase ? false : (connection.showPrices || userType === 'business'));
+    const isSalesFromNotes = (dto.notes?.includes('مبيعات') || dto.notes?.includes('فاتورة')) ?? false;
+    // Determine pricesVisible:
+    // - If dto.pricesVisible is explicitly provided (not null/undefined), use it
+    // - If accountRole=CUSTOMER (sales invoice) or notes indicate sales, prices are always visible
+    // - If isPurchase (supplier order), prices are hidden until supplier accepts
+    // - Otherwise, use connection.showPrices or business user type
+    let pricesVisible: boolean;
+    if (dto.pricesVisible != null) {
+      pricesVisible = dto.pricesVisible;
+    } else if (dto.accountRole === 'CUSTOMER' || isSalesFromNotes) {
+      // Sales invoice always has visible prices
+      pricesVisible = true;
+    } else if (isPurchase) {
+      pricesVisible = false;
+    } else {
+      pricesVisible = !!(connection.showPrices || userType === 'business');
+    }
+
     let subtotal = new Decimal(0);
     const itemsData = dto.items.map((item) => {
       const unitPrice = pricesVisible
