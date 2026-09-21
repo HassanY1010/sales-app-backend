@@ -76,6 +76,9 @@ export class AgentsController {
   @UseGuards(JwtAuthGuard)
   async getMyDashboard(@CurrentUser() user: any) {
     const agentProfile = await this.agentsService.findByUserId(user.userId);
+    if (!agentProfile) {
+      throw new ForbiddenException('ليس لديك حساب مندوب.');
+    }
     if (agentProfile.status !== AgentStatus.ACTIVE) {
       throw new ForbiddenException('حساب المندوب الخاص بك غير نشط حالياً.');
     }
@@ -86,6 +89,8 @@ export class AgentsController {
   @Get('me/commissions')
   @UseGuards(JwtAuthGuard)
   async getMyCommissions(@CurrentUser() user: any) {
+    const agentProfile = await this.agentsService.findByUserId(user.userId);
+    if (!agentProfile) return [];
     return this.agentsService.getCommissionsForUser(user.userId);
   }
 

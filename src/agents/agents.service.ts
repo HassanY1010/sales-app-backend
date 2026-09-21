@@ -163,10 +163,8 @@ export class AgentsService {
         region: true,
       },
     });
-    if (!agent) {
-      throw new NotFoundException('حساب المندوب الخاص بك غير موجود.');
-    }
-    return agent;
+    // Return null if the user is not an agent (don't throw 404 — the app checks this for all users)
+    return agent ?? null;
   }
 
   async validateCode(code: string) {
@@ -303,6 +301,7 @@ export class AgentsService {
   /** Returns all commissions for the user's agent account (mobile self-service) */
   async getCommissionsForUser(userId: string) {
     const agent = await this.findByUserId(userId);
+    if (!agent) return [];
     return this.prisma.commission.findMany({
       where: { agentId: agent.id },
       include: {
@@ -316,6 +315,7 @@ export class AgentsService {
   /** Returns all users referred by this agent (mobile self-service) */
   async getReferralsForUser(userId: string) {
     const agent = await this.findByUserId(userId);
+    if (!agent) return [];
     return this.prisma.user.findMany({
       where: { referredByAgentId: agent.id },
       select: {
