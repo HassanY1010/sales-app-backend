@@ -345,9 +345,14 @@ export class FinanceService {
       },
     });
 
-    // 7. Send Real-time Notification
+    // 7. Send Real-time Notification (OUTSIDE transaction - non-critical, must not block)
+    // We schedule it to run after this function returns (fire-and-forget)
     if (!skipNotification) {
-      await this.notifyFinancialMovement(params, newBalance, transaction.id, tx);
+      setImmediate(() => {
+        this.notifyFinancialMovement(params, newBalance, transaction.id).catch((err) => {
+          this.logger.error(`notifyFinancialMovement failed silently: ${err?.message}`);
+        });
+      });
     }
 
     return { transaction, newBalance };
@@ -367,10 +372,10 @@ export class FinanceService {
     params: any,
     newBalance: Decimal,
     transactionId?: string,
-    tx?: Prisma.TransactionClient,
   ) {
     const { senderId, receiverId, amount, type, orderId, note } = params;
-    const client = (tx && (tx as any).business) ? tx : this.prisma;
+    // Always use this.prisma here — notifications run AFTER the transaction commits
+    const client = this.prisma;
 
     // Fetch participants for notification
     const sender = await client.business.findUnique({

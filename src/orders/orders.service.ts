@@ -625,33 +625,38 @@ export class OrdersService {
           include: { user: true },
         });
 
-        if (targetBusiness) {
+        if (targetBusiness?.user?.id) {
           const title = 'تم قبول الطلبية وتحويلها لفاتورة';
           const body = `تم قبول طلبيتك رقم #${order.orderNumber} وتحويلها لفاتورة مبيعات رقم #${result.invoiceNumber}`;
-          await this.notificationsService.sendPushNotification(
-            targetBusiness.user.id,
-            title,
-            body,
-            {
-              type: 'ORDER_ACCEPTED_CONVERTED',
-              notificationType: 'order_accepted_converted',
-              entityType: 'order',
-              entityId: order.id,
-              orderId: order.id,
-              invoiceId: result.invoiceId,
-              invoiceNumber: result.invoiceNumber,
-              route: `/orders/${result.invoiceId || order.id}`,
-            },
-          );
-
-          this.eventsGateway.emitToBusiness(order.senderId, 'ORDER_STATUS_UPDATE', {
-            orderId: order.id,
-            status: 'ACCEPTED',
-            orderNumber: order.orderNumber,
-            invoiceId: result.invoiceId,
-            invoiceNumber: result.invoiceNumber,
-          });
+          try {
+            await this.notificationsService.sendPushNotification(
+              targetBusiness.user.id,
+              title,
+              body,
+              {
+                type: 'ORDER_ACCEPTED_CONVERTED',
+                notificationType: 'order_accepted_converted',
+                entityType: 'order',
+                entityId: order.id,
+                orderId: order.id,
+                invoiceId: result.invoiceId,
+                invoiceNumber: result.invoiceNumber,
+                route: `/orders/${result.invoiceId || order.id}`,
+              },
+            );
+          } catch (notifErr: any) {
+            // Non-critical: log but don't fail the order acceptance
+            console.error('Failed to send order acceptance notification:', notifErr?.message);
+          }
         }
+
+        this.eventsGateway.emitToBusiness(order.senderId, 'ORDER_STATUS_UPDATE', {
+          orderId: order.id,
+          status: 'ACCEPTED',
+          orderNumber: order.orderNumber,
+          invoiceId: result.invoiceId,
+          invoiceNumber: result.invoiceNumber,
+        });
 
         await this.prisma.auditLog.create({
           data: {
@@ -692,20 +697,24 @@ export class OrdersService {
         where: { id: order.senderId },
       });
 
-      if (receiverBusiness && senderBusiness) {
-        await this.notificationsService.sendPushNotification(
-          receiverBusiness.user.id,
-          'إعادة تقديم طلبية شحن',
-          `أعاد العميل ${senderBusiness.name} تقديم طلبيته رقم #${order.orderNumber}`,
-          {
-            type: 'ORDER_RESUBMITTED',
-            notificationType: 'order_resubmitted',
-            entityType: 'order',
-            entityId: order.id,
-            orderId: order.id,
-            route: `/receive-orders/incoming?orderId=${order.id}`,
-          },
-        );
+      if (receiverBusiness?.user?.id && senderBusiness) {
+        try {
+          await this.notificationsService.sendPushNotification(
+            receiverBusiness.user.id,
+            'إعادة تقديم طلبية شحن',
+            `أعاد العميل ${senderBusiness.name} تقديم طلبيته رقم #${order.orderNumber}`,
+            {
+              type: 'ORDER_RESUBMITTED',
+              notificationType: 'order_resubmitted',
+              entityType: 'order',
+              entityId: order.id,
+              orderId: order.id,
+              route: `/receive-orders/incoming?orderId=${order.id}`,
+            },
+          );
+        } catch (notifErr: any) {
+          console.error('Failed to send resubmit notification:', notifErr?.message);
+        }
 
         this.eventsGateway.emitToBusiness(order.receiverId, 'NEW_ORDER', {
           id: order.id,
@@ -799,23 +808,29 @@ export class OrdersService {
       return 'order_status_update';
     })();
 
-    await this.notificationsService.sendPushNotification(
-      targetBusiness.user.id,
-      title,
-      body,
-      {
-        type: notificationType.toUpperCase(),
-        notificationType,
-        entityType: 'order',
-        entityId: order.id,
-        orderId: order.id,
-        status,
-        rejectionReason: reason,
-        route: notificationType === 'order_rejected' || notificationType === 'order_rejected_credit_limit'
-          ? `/purchase-orders/received-list?orderId=${order.id}`
-          : `/orders/${order.id}`,
-      },
-    );
+    if (targetBusiness?.user?.id) {
+      try {
+        await this.notificationsService.sendPushNotification(
+          targetBusiness.user.id,
+          title,
+          body,
+          {
+            type: notificationType.toUpperCase(),
+            notificationType,
+            entityType: 'order',
+            entityId: order.id,
+            orderId: order.id,
+            status,
+            rejectionReason: reason,
+            route: notificationType === 'order_rejected' || notificationType === 'order_rejected_credit_limit'
+              ? `/purchase-orders/received-list?orderId=${order.id}`
+              : `/orders/${order.id}`,
+          },
+        );
+      } catch (notifErr: any) {
+        console.error('Failed to send order status notification:', notifErr?.message);
+      }
+    }
 
     this.eventsGateway.emitToBusiness(order.senderId, 'ORDER_STATUS_UPDATE', {
       orderId: order.id,
