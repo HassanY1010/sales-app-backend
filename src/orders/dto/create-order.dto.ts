@@ -23,7 +23,8 @@ export class CreateOrderItemDto {
   quantity: number;
 
   @IsNumberString()
-  unitPrice: string;
+  @IsOptional()
+  unitPrice?: string; // Optional for purchase orders where prices are not yet set
 
   @IsString()
   @IsOptional()

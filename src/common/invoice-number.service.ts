@@ -13,23 +13,29 @@ export class InvoiceNumberService {
   public async ensureTablesExist() {
     if (InvoiceNumberService.tablesInitialized) return;
     try {
+      // Run each statement separately — multi-statement $executeRawUnsafe can fail on some PostgreSQL setups
       await this.prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS business_invoice_counter (
           "businessId" TEXT PRIMARY KEY,
           "lastNum" BIGINT NOT NULL DEFAULT 0
-        );
+        )
+      `);
+      await this.prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS business_voucher_counter (
           "businessId" TEXT PRIMARY KEY,
           "lastNum" BIGINT NOT NULL DEFAULT 0
-        );
+        )
+      `);
+      await this.prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS business_order_counter (
           "businessId" TEXT PRIMARY KEY,
           "lastNum" BIGINT NOT NULL DEFAULT 0
-        );
+        )
       `);
       InvoiceNumberService.tablesInitialized = true;
-    } catch {
-      // Ignored
+    } catch (err) {
+      // Log the error but don't throw — fallback logic exists in each counter method
+      console.error('[InvoiceNumberService] Failed to create counter tables:', err?.message);
     }
   }
 
@@ -44,45 +50,58 @@ export class InvoiceNumberService {
     businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<string> {
+    // Ensure tables exist before querying (static flag makes this a no-op after first call)
+    await this.ensureTablesExist();
     const client = (tx ?? this.prisma) as any;
 
-    const result = (await client.$queryRawUnsafe(
-      `
-      WITH current_max AS (
-        SELECT COALESCE(
-          MAX(
-            CASE 
-              WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT 
-              ELSE 0 
-            END
-          ), 
-          0
-        ) AS max_num
-        FROM orders
-        WHERE "senderId" = $1
-      )
-      INSERT INTO business_invoice_counter ("businessId", "lastNum")
-      SELECT $1, GREATEST(1, max_num + 1)
-      FROM current_max
-      ON CONFLICT ("businessId")
-      DO UPDATE SET "lastNum" = (
-        SELECT GREATEST(
-          business_invoice_counter."lastNum" + 1,
-          current_max.max_num + 1
+    try {
+      const result = (await client.$queryRawUnsafe(
+        `
+        WITH current_max AS (
+          SELECT COALESCE(
+            MAX(
+              CASE 
+                WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT 
+                ELSE 0 
+              END
+            ), 
+            0
+          ) AS max_num
+          FROM orders
+          WHERE "senderId" = $1
         )
+        INSERT INTO business_invoice_counter ("businessId", "lastNum")
+        SELECT $1, GREATEST(1, max_num + 1)
         FROM current_max
-      )
-      RETURNING "lastNum";
-      `,
-      businessId,
-    )) as { lastNum: bigint }[];
+        ON CONFLICT ("businessId")
+        DO UPDATE SET "lastNum" = (
+          SELECT GREATEST(
+            business_invoice_counter."lastNum" + 1,
+            current_max.max_num + 1
+          )
+          FROM current_max
+        )
+        RETURNING "lastNum";
+        `,
+        businessId,
+      )) as { lastNum: bigint }[];
 
-    const num = result[0]?.lastNum;
-    if (num === undefined || num === null) {
-      throw new Error('Failed to generate invoice number');
+      const num = result[0]?.lastNum;
+      if (num === undefined || num === null) {
+        throw new Error('Failed to generate invoice number');
+      }
+      return num.toString();
+    } catch (err: any) {
+      // If counter table still missing, fallback to MAX(orderNumber) + 1
+      if (err?.message?.includes('business_invoice_counter') || err?.message?.includes('does not exist')) {
+        const rows = await this.prisma.$queryRawUnsafe<{ max_num: bigint }[]>(
+          `SELECT COALESCE(MAX(CASE WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT ELSE 0 END), 0) AS max_num FROM orders WHERE "senderId" = $1`,
+          businessId,
+        );
+        return ((rows[0]?.max_num ?? BigInt(0)) + BigInt(1)).toString();
+      }
+      throw err;
     }
-
-    return num.toString();
   }
 
   /**
@@ -181,45 +200,58 @@ export class InvoiceNumberService {
     businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<string> {
+    // Ensure tables exist before querying (static flag makes this a no-op after first call)
+    await this.ensureTablesExist();
     const client = (tx ?? this.prisma) as any;
 
-    const result = (await client.$queryRawUnsafe(
-      `
-      WITH current_max AS (
-        SELECT COALESCE(
-          MAX(
-            CASE 
-              WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT 
-              ELSE 0 
-            END
-          ), 
-          0
-        ) AS max_num
-        FROM orders
-        WHERE "senderId" = $1
-      )
-      INSERT INTO business_order_counter ("businessId", "lastNum")
-      SELECT $1, GREATEST(1, max_num + 1)
-      FROM current_max
-      ON CONFLICT ("businessId")
-      DO UPDATE SET "lastNum" = (
-        SELECT GREATEST(
-          business_order_counter."lastNum" + 1,
-          current_max.max_num + 1
+    try {
+      const result = (await client.$queryRawUnsafe(
+        `
+        WITH current_max AS (
+          SELECT COALESCE(
+            MAX(
+              CASE 
+                WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT 
+                ELSE 0 
+              END
+            ), 
+            0
+          ) AS max_num
+          FROM orders
+          WHERE "senderId" = $1
         )
+        INSERT INTO business_order_counter ("businessId", "lastNum")
+        SELECT $1, GREATEST(1, max_num + 1)
         FROM current_max
-      )
-      RETURNING "lastNum";
-      `,
-      businessId,
-    )) as { lastNum: bigint }[];
+        ON CONFLICT ("businessId")
+        DO UPDATE SET "lastNum" = (
+          SELECT GREATEST(
+            business_order_counter."lastNum" + 1,
+            current_max.max_num + 1
+          )
+          FROM current_max
+        )
+        RETURNING "lastNum";
+        `,
+        businessId,
+      )) as { lastNum: bigint }[];
 
-    const num = result[0]?.lastNum;
-    if (num === undefined || num === null) {
-      throw new Error('Failed to generate order number');
+      const num = result[0]?.lastNum;
+      if (num === undefined || num === null) {
+        throw new Error('Failed to generate order number');
+      }
+      return num.toString();
+    } catch (err: any) {
+      // If counter table still missing, fallback to MAX(orderNumber) + 1
+      if (err?.message?.includes('business_order_counter') || err?.message?.includes('does not exist')) {
+        const rows = await this.prisma.$queryRawUnsafe<{ max_num: bigint }[]>(
+          `SELECT COALESCE(MAX(CASE WHEN "orderNumber" ~ '^[0-9]+$' THEN "orderNumber"::BIGINT ELSE 0 END), 0) AS max_num FROM orders WHERE "senderId" = $1`,
+          businessId,
+        );
+        return ((rows[0]?.max_num ?? BigInt(0)) + BigInt(1)).toString();
+      }
+      throw err;
     }
-
-    return num.toString();
   }
 
   /**
