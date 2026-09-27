@@ -253,6 +253,42 @@ export class OrdersService {
           pricesVisible: order.pricesVisible,
         });
 
+        // Send Notification & Push Notification to receiver
+        setImmediate(async () => {
+          try {
+            const receiverBusiness = await this.prisma.business.findUnique({
+              where: { id: actualReceiverBusinessId },
+              include: { user: true },
+            });
+            if (receiverBusiness?.user?.id) {
+              const notifTitle = isPurchase ? 'طلبية شراء جديدة' : 'فاتورة مبيعات جديدة';
+              const notifBody = isPurchase
+                ? `أرسل لك ${senderBusiness.name} طلبية شراء جديدة برقم #${order.orderNumber}`
+                : `أصدر لك ${senderBusiness.name} فاتورة مبيعات برقم #${order.orderNumber}`;
+              const notifType = isPurchase ? 'NEW_ORDER' : 'NEW_INVOICE';
+              const route = isPurchase
+                ? `/receive-orders/incoming?orderId=${order.id}`
+                : `/orders/${order.id}`;
+
+              await this.notificationsService.sendPushNotification(
+                receiverBusiness.user.id,
+                notifTitle,
+                notifBody,
+                {
+                  type: notifType,
+                  notificationType: notifType.toLowerCase(),
+                  entityType: isPurchase ? 'order' : 'invoice',
+                  entityId: order.id,
+                  orderId: order.id,
+                  route,
+                },
+              );
+            }
+          } catch (notifErr: any) {
+            console.error('[createOrder] Failed to send order notification:', notifErr?.message);
+          }
+        });
+
         await prisma.auditLog.create({
           data: {
             action: 'CREATE',

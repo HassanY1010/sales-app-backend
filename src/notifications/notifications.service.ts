@@ -102,9 +102,11 @@ export class NotificationsService {
         data: {
           ...this.toFcmData(data),
           badge: unreadCount.toString(),
+          unreadCount: unreadCount.toString(),
         },
         android: {
           notification: {
+            channelId: 'high_importance_channel',
             notificationCount: unreadCount,
           },
         },
