@@ -149,7 +149,9 @@ export class InvoiceNumberService {
 
   /**
    * Generates the next sequential voucher (receipt/payment) number for a specific business.
-   * Starts at 1 for each user.
+   * Starts at 1 for each user and increments sequentially without collisions.
+   * Synchronizes against existing transactions (where business is sender OR receiver)
+   * to guarantee monotonic progression.
    */
   async getNextVoucherNumber(
     businessId: string,
@@ -160,13 +162,36 @@ export class InvoiceNumberService {
     const client = (tx ?? this.prisma) as any;
 
     try {
-      const result = await client.$queryRaw<{ lastNum: bigint }[]>`
+      const result = (await client.$queryRawUnsafe(
+        `
+        WITH current_max AS (
+          SELECT COALESCE(
+            MAX(
+              CASE 
+                WHEN "voucherNumber" ~ '^[0-9]+$' THEN "voucherNumber"::BIGINT 
+                ELSE 0 
+              END
+            ), 
+            0
+          ) AS max_num
+          FROM transactions
+          WHERE "senderId" = $1 OR "receiverId" = $1
+        )
         INSERT INTO business_voucher_counter ("businessId", "lastNum")
-        VALUES (${businessId}, 1)
+        SELECT $1, GREATEST(1, max_num + 1)
+        FROM current_max
         ON CONFLICT ("businessId")
-        DO UPDATE SET "lastNum" = business_voucher_counter."lastNum" + 1
-        RETURNING "lastNum"
-      `;
+        DO UPDATE SET "lastNum" = (
+          SELECT GREATEST(
+            business_voucher_counter."lastNum" + 1,
+            current_max.max_num + 1
+          )
+          FROM current_max
+        )
+        RETURNING "lastNum";
+        `,
+        businessId,
+      )) as { lastNum: bigint }[];
 
       const num = result[0]?.lastNum;
       if (num === undefined || num === null) {
@@ -179,7 +204,7 @@ export class InvoiceNumberService {
       if (err?.message?.includes('business_voucher_counter') || err?.message?.includes('does not exist')) {
         const rows = await this.prisma.$queryRawUnsafe<{ max_num: bigint }[]>(
           `SELECT COALESCE(MAX(CASE WHEN "voucherNumber" ~ '^[0-9]+$' THEN "voucherNumber"::BIGINT ELSE 0 END), 0) AS max_num
-           FROM transactions WHERE "senderId" = $1`,
+           FROM transactions WHERE "senderId" = $1 OR "receiverId" = $1`,
           businessId,
         );
         return ((rows[0]?.max_num ?? BigInt(0)) + BigInt(1)).toString();
@@ -193,6 +218,7 @@ export class InvoiceNumberService {
    * Uses GREATEST of counter table and actual max in transactions to stay in sync.
    */
   async peekNextVoucherNumber(businessId: string): Promise<string> {
+    await this.ensureTablesExist();
     try {
       const rows = await this.prisma.$queryRawUnsafe<{ peekNum: bigint }[]>(
         `
@@ -207,7 +233,7 @@ export class InvoiceNumberService {
             0
           ) AS max_num
           FROM transactions
-          WHERE "senderId" = $1
+          WHERE "senderId" = $1 OR "receiverId" = $1
         ),
         counter AS (
           SELECT "lastNum"
