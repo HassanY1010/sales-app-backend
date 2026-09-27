@@ -155,37 +155,78 @@ export class InvoiceNumberService {
     businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<string> {
+    // Ensure tables exist before querying (same as invoice/order counters)
+    await this.ensureTablesExist();
     const client = (tx ?? this.prisma) as any;
 
-    const result = await client.$queryRaw<{ lastNum: bigint }[]>`
-      INSERT INTO business_voucher_counter ("businessId", "lastNum")
-      VALUES (${businessId}, 1)
-      ON CONFLICT ("businessId")
-      DO UPDATE SET "lastNum" = business_voucher_counter."lastNum" + 1
-      RETURNING "lastNum"
-    `;
+    try {
+      const result = await client.$queryRaw<{ lastNum: bigint }[]>`
+        INSERT INTO business_voucher_counter ("businessId", "lastNum")
+        VALUES (${businessId}, 1)
+        ON CONFLICT ("businessId")
+        DO UPDATE SET "lastNum" = business_voucher_counter."lastNum" + 1
+        RETURNING "lastNum"
+      `;
 
-    const num = result[0]?.lastNum;
-    if (num === undefined || num === null) {
-      throw new Error('Failed to generate voucher number');
+      const num = result[0]?.lastNum;
+      if (num === undefined || num === null) {
+        throw new Error('Failed to generate voucher number');
+      }
+
+      return num.toString();
+    } catch (err: any) {
+      // If counter table still missing, fallback to MAX(voucherNumber) + 1 from transactions
+      if (err?.message?.includes('business_voucher_counter') || err?.message?.includes('does not exist')) {
+        const rows = await this.prisma.$queryRawUnsafe<{ max_num: bigint }[]>(
+          `SELECT COALESCE(MAX(CASE WHEN "voucherNumber" ~ '^[0-9]+$' THEN "voucherNumber"::BIGINT ELSE 0 END), 0) AS max_num
+           FROM transactions WHERE "senderId" = $1`,
+          businessId,
+        );
+        return ((rows[0]?.max_num ?? BigInt(0)) + BigInt(1)).toString();
+      }
+      throw err;
     }
-
-    return num.toString();
   }
 
   /**
    * Peeks the upcoming next voucher number for a specific business without incrementing.
+   * Uses GREATEST of counter table and actual max in transactions to stay in sync.
    */
   async peekNextVoucherNumber(businessId: string): Promise<string> {
     try {
-      const rows = await this.prisma.$queryRaw<{ lastNum: bigint }[]>`
-        SELECT "lastNum" FROM business_voucher_counter WHERE "businessId" = ${businessId}
-      `;
-      const lastNum = rows[0]?.lastNum;
-      if (lastNum === undefined || lastNum === null) {
+      const rows = await this.prisma.$queryRawUnsafe<{ peekNum: bigint }[]>(
+        `
+        WITH current_max AS (
+          SELECT COALESCE(
+            MAX(
+              CASE
+                WHEN "voucherNumber" ~ '^[0-9]+$' THEN "voucherNumber"::BIGINT
+                ELSE 0
+              END
+            ),
+            0
+          ) AS max_num
+          FROM transactions
+          WHERE "senderId" = $1
+        ),
+        counter AS (
+          SELECT "lastNum"
+          FROM business_voucher_counter
+          WHERE "businessId" = $1
+        )
+        SELECT GREATEST(
+          COALESCE((SELECT "lastNum" + 1 FROM counter), 1),
+          (SELECT max_num + 1 FROM current_max)
+        ) AS "peekNum";
+        `,
+        businessId,
+      );
+
+      const peekNum = rows[0]?.peekNum;
+      if (peekNum === undefined || peekNum === null) {
         return '1';
       }
-      return (BigInt(lastNum) + BigInt(1)).toString();
+      return peekNum.toString();
     } catch {
       return '1';
     }
