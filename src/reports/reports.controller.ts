@@ -80,11 +80,15 @@ export class ReportsController {
   }
 
   @Get('activity')
-  async getRecentActivity(@CurrentUser() user: any) {
+  async getRecentActivity(
+    @CurrentUser() user: any,
+    @Query('limit') limit?: string,
+  ) {
     if (!user.businessId) {
       throw new ForbiddenException('User does not have an associated business');
     }
-    return this.reportsService.getRecentActivity(user.businessId);
+    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+    return this.reportsService.getRecentActivity(user.businessId, parsedLimit);
   }
 
   @Get('weekly-sales')

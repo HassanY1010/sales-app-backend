@@ -158,10 +158,14 @@ export class OrdersService {
     const taxAmount = new Decimal(dto.tax || '0');
     const discountAmount = new Decimal(dto.discount || '0');
     const finalTotal = subtotal.plus(taxAmount).minus(discountAmount);
-    const isCash = dto.isCash ?? false;
+    const actualPaidAmountInput = new Decimal(dto.paidAmount || '0');
+    const isCash = dto.isCash || actualPaidAmountInput.greaterThanOrEqualTo(finalTotal);
     const paidAmount = isCash
       ? finalTotal
-      : Decimal.min(new Decimal(dto.paidAmount || '0'), finalTotal);
+      : Decimal.min(actualPaidAmountInput, finalTotal);
+    const surplusAmount = actualPaidAmountInput.greaterThan(finalTotal)
+      ? actualPaidAmountInput.minus(finalTotal)
+      : new Decimal(0);
 
     if (!isCash && pricesVisible) {
       const currentDebit = new Decimal(connection.account.totalDebit?.toString() ?? '0');
@@ -209,6 +213,7 @@ export class OrdersService {
             isCash,
             currency,
             dueDate: dueDate ?? undefined,
+            createdAt: dto.dueDate ? new Date(dto.dueDate) : undefined,
             pricesVisible,
             priceAcceptedAt: pricesVisible ? new Date() : undefined,
             subtotal: subtotal.toString(),
@@ -235,6 +240,7 @@ export class OrdersService {
             orderId: order.id,
             currency,
             dueDate: dueDate ?? undefined,
+            createdAt: dto.dueDate ?? undefined,
             note: isCash
               ? `فاتورة مبيعات نقدية رقم ${orderNumber}`
               : (paidAmount.greaterThan(0)
@@ -243,6 +249,22 @@ export class OrdersService {
             connectionId: connection.id,
             accountRole: 'CUSTOMER',
           });
+
+          // 2. If there is a surplus amount (overpayment), record a PAYMENT (receipt voucher)
+          if (surplusAmount.greaterThan(0)) {
+            await this.financeService.recordFinancialMovement(prisma, {
+              senderId: actualReceiverBusinessId, // Customer (who paid)
+              receiverId: senderId,               // Merchant (who received)
+              amount: surplusAmount.toString(),
+              type: 'PAYMENT',
+              currency,
+              dueDate: dueDate ?? undefined,
+              createdAt: dto.dueDate ?? undefined,
+              note: `سند قبض بفارق سداد الفاتورة رقم ${orderNumber}`,
+              connectionId: connection.id,
+              accountRole: 'CUSTOMER',
+            });
+          }
         }
 
         this.eventsGateway.emitToBusiness(actualReceiverBusinessId, 'NEW_ORDER', {
@@ -630,6 +652,7 @@ export class OrdersService {
             orderId: order.id,
             currency: order.currency,
             dueDate: order.dueDate ?? undefined,
+            createdAt: order.createdAt ?? undefined,
             note: order.isCash
               ? `فاتورة نقدية #${order.orderNumber}`
               : (new Decimal((order as any).paidAmount || '0').greaterThan(0)

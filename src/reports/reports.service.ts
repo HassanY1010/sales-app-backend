@@ -429,18 +429,18 @@ export class ReportsService {
       });
   }
 
-  async getRecentActivity(businessId: string) {
+  async getRecentActivity(businessId: string, limit: number = 50) {
     const [orders, transactions] = await Promise.all([
       this.prisma.order.findMany({
         where: { OR: [{ senderId: businessId }, { receiverId: businessId }] },
         orderBy: { createdAt: 'desc' },
-        take: 5,
+        take: limit,
         include: { sender: true, receiver: true },
       }),
       this.prisma.transaction.findMany({
         where: { OR: [{ senderId: businessId }, { receiverId: businessId }] },
         orderBy: { createdAt: 'desc' },
-        take: 5,
+        take: limit,
         include: { sender: true, receiver: true },
       }),
     ]);
@@ -468,7 +468,7 @@ export class ReportsService {
 
     return activities
       .sort((a, b) => b.date.getTime() - a.date.getTime())
-      .slice(0, 10);
+      .slice(0, limit);
   }
 
   async getWeeklySalesData(businessId: string, query: any = {}) {

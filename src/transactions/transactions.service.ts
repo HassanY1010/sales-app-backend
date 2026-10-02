@@ -70,6 +70,7 @@ export class TransactionsService {
             voucherNumber: finalVoucherNumber,
             currency: dto.currency,
             dueDate: dto.dueDate,
+            createdAt: dto.dueDate,
             attachmentUrl: dto.attachmentUrl,
             connectionId: dto.connectionId,
             accountRole: dto.accountRole,

@@ -43,6 +43,7 @@ export class FinanceService {
       voucherNumber?: string;
       currency?: string;
       dueDate?: string | Date;
+      createdAt?: string | Date;
       attachmentUrl?: string;
       userId?: string; // For audit logging
       connectionId?: string;
@@ -318,6 +319,7 @@ export class FinanceService {
         dueDate: params.dueDate
           ? new Date(params.dueDate)
           : connection.account.dueDate,
+        createdAt: params.createdAt ? new Date(params.createdAt) : undefined,
         attachmentUrl: params.attachmentUrl,
         balanceAfter: newBalance.toString(),
         senderId,

@@ -431,7 +431,8 @@ export class AdjustmentRequestsService {
                 for (let i = 0; i < items.length; i++) {
                   const item = items[i];
                   const itemId = item.id || item.itemId;
-                  const qty = Math.max(1, parseInt(item.quantity?.toString() || '1', 10));
+                  const parsedQty = parseInt(item.quantity?.toString(), 10);
+                  const qty = Math.max(0, isNaN(parsedQty) ? 1 : parsedQty);
                   const unitPrice = item.unitPrice !== undefined ? item.unitPrice.toString() : '0';
                   const itemTotal = new Decimal(qty).times(new Decimal(unitPrice)).toString();
                   const unit = item.unit || undefined;

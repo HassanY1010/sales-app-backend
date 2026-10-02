@@ -132,7 +132,7 @@ export class InvoiceNumberService {
         SELECT GREATEST(
           COALESCE((SELECT "lastNum" + 1 FROM counter), 1),
           (SELECT max_num + 1 FROM current_max)
-        ) AS peekNum;
+        ) AS "peekNum";
         `,
         businessId,
       )) as { peekNum: bigint }[];
@@ -142,7 +142,8 @@ export class InvoiceNumberService {
         return '1';
       }
       return peekNum.toString();
-    } catch {
+    } catch (error) {
+      console.error('[peekNextInvoiceNumber] Error:', error);
       return '1';
     }
   }
@@ -349,7 +350,7 @@ export class InvoiceNumberService {
         SELECT GREATEST(
           COALESCE((SELECT "lastNum" + 1 FROM counter), 1),
           (SELECT max_num + 1 FROM current_max)
-        ) AS peekNum;
+        ) AS "peekNum";
         `,
         businessId,
       )) as { peekNum: bigint }[];
